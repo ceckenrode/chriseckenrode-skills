@@ -14,7 +14,7 @@ skill for the selected backend:
 | --- | --- |
 | Codex CLI | `use-codex` |
 | Claude Code CLI | `use-claude` |
-| OpenCode | `use-opencode` |
+| GLM via OpenCode | `use-glm` |
 
 Discover these by skill name in the host's installed catalog; in this source
 repository each lives in its own top-level directory. Load only the selected
@@ -26,9 +26,9 @@ Announce a fallback and its reason once. Native slowness, task failure, or a
 permission denial does not authorize switching backends to evade a restriction.
 
 Preserve the model and effort settled in [workflow setup](workflow.md), including
-on resume. A fallback never authorizes model substitution. For an explicitly
-requested provider adapter such as `spawn-glm`, load that skill instead of the
-generic CLI skill; its recipes remain there.
+on resume. A fallback never authorizes model substitution. When the installed
+`spawn-glm` low-level wrapper is explicitly requested, load it as directed by
+`use-glm`; its wrapper recipes remain there.
 
 Workers use full permissions by default within host restrictions, unless the
 user requests a restricted mode. Native workers inherit runtime permissions;

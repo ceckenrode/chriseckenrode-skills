@@ -1,6 +1,6 @@
 ---
 name: use-claude
-description: Dispatch workers through Claude Code CLI when explicitly requested or when another skill selects Claude Code as its CLI backend.
+description: Dispatch workers through Claude Code CLI when a Claude model is requested without native subagent support, or when Claude Code is explicitly selected as the CLI backend.
 ---
 
 # Use Claude

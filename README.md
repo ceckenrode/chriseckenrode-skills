@@ -10,7 +10,7 @@ Hermes or OpenClaw on Hetzner.
 | [conductor](conductor/README.md) | Coordinate planning, implementation, and optional review across selected models. |
 | [use-codex](use-codex/SKILL.md) | Dispatch and resume workers through Codex CLI. |
 | [use-claude](use-claude/SKILL.md) | Dispatch and resume workers through Claude Code CLI. |
-| [use-opencode](use-opencode/SKILL.md) | Dispatch and resume workers through OpenCode CLI. |
+| [use-glm](use-glm/SKILL.md) | Dispatch GLM workers through OpenCode. Defaults to zai-coding-plan/glm-5.3. |
 | [spawn-glm](spawn-glm/README.md) | Run GLM workers through OpenCode and the Z.AI coding plan. |
 | [hetzner-hermes-claw-box](hetzner-hermes-claw-box/README.md) | Set up and manage Tailscale-only Hetzner boxes for Hermes or OpenClaw. |
 

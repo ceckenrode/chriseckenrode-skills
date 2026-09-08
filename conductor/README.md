@@ -32,7 +32,7 @@ Review/fix loops require a round cap and stopping condition.
 
 Native subagents are preferred. For CLI dispatch, install the matching companion
 skill: [use-codex](../use-codex/SKILL.md), [use-claude](../use-claude/SKILL.md), or
-[use-opencode](../use-opencode/SKILL.md). These model-invoked skills own CLI
+[use-glm](../use-glm/SKILL.md). These model-invoked skills own CLI
 commands and session handling; Conductor owns assignments and acceptance.
 The selected CLI must already be installed and authenticated.
 
