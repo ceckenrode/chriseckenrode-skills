@@ -10,14 +10,14 @@ Repository: [ceckenrode/chriseckenrode-skills](https://github.com/ceckenrode/chr
 
 | Skill | What it does |
 | --- | --- |
-| [conductor](conductor/SKILL.md) | Coordinates other models while the orchestrator owns direction, planning, supervision, and verification. Splits work for parallel execution, writes detailed worker briefs, and carries context through handoffs. Review loops are optional. |
+| [conductor](conductor/SKILL.md) | User-invoked orchestration aiming to save the lead model's tokens by delegating work to smaller models. The lead owns direction, planning, supervision, and verification. Supports parallel work, configurable review loops, and built-in usage help. |
 | [spawn-glm](spawn-glm/SKILL.md) | Runs a GLM worker through OpenCode and the Z.AI coding plan. Defaults to `zai-coding-plan/glm-5.3`; respects explicit model choices. Adds no orchestration or review workflow of its own. |
-| [hetzner-hermes-claw-box](hetzner-hermes-claw-box/SKILL.md) | Sets up and manages Tailscale-only Hetzner boxes running Hermes or OpenClaw. OpenClaw setup includes a dashboard URL handoff and PWA installation guidance. Credentials and box state stay in a separate working directory, outside the skill. |
+| [hetzner-hermes-claw-box](hetzner-hermes-claw-box/SKILL.md) | User-invoked setup and management for Tailscale-only Hetzner boxes running Hermes or OpenClaw. OpenClaw setup includes a dashboard URL handoff and PWA installation guidance. Credentials and box state stay in a separate working directory, outside the skill. |
 
 Conductor uses the current host's native subagents when available—including
 Claude-native subagents in Claude Code—and selects a compatible CLI only when
-needed or requested. It does not require GLM; install `spawn-glm` as well if you
-want GLM workers.
+needed or requested. An explicitly requested `spawn-glm` adapter is optional;
+native or compatible CLI dispatch requires no companion skill.
 
 ## Install through your agent
 
@@ -65,7 +65,36 @@ not assume every host uses the same directory. If the agent cannot determine tha
 layout, it should ask. If a newly installed skill is not visible in the current
 chat, start a new chat or reload skills as supported by the host.
 
+### Install from a local clone
+
+When developing the skills, this repository is the source of truth. Symlink each
+skill into the host's skills directory so edits here are live without re-copying:
+
+```bash
+cd /path/to/chriseckenrode-skills
+for s in conductor spawn-glm hetzner-hermes-claw-box; do
+  rm -rf ~/.claude/skills/"$s"   # remove a stale copy first; ln would otherwise link inside it
+  ln -s "$PWD/$s" ~/.claude/skills/"$s"
+done
+```
+
+For Codex use `~/.codex/skills` instead.
+
 ## Use the skills
+
+Conductor and hetzner-hermes-claw-box are user-invoked only; the agent must not
+activate either on its own. Start
+with `$conductor help` in Codex or `/conductor help` in Claude Code for examples
+and guidance. Start with the goal, then settle the user-configured stages' models and
+reasoning effort up front; reviews remain opt-in. Describe the arrangement you
+want in plain language.
+
+After an authorized planning or exploration request starts, Conductor may
+automatically delegate bounded, read-only navigation and raw-context gathering to
+suitable small native models, which return distilled, anchored evidence while the
+orchestrator retains architecture, planning, and decisions. This does not run
+from help or a bare invocation, and it does not replace settings for
+implementation, review, fixes, or final verification.
 
 After installation, refer to the skill by name in ordinary chat. Replace the
 bracketed task or path with your own. Hosts that support skill mentions can also
@@ -74,7 +103,16 @@ use `$conductor`, `$spawn-glm`, or `$hetzner-hermes-claw-box`.
 **Plan and implement with delegated workers:**
 
 ```text
-Use conductor to plan and implement [task]. Parallelize independent work and verify the result. No review loop.
+Use conductor to plan and implement [task] as tracer-bullet slices. Make the
+first slice prove the minimal real path end to end, expand it in later slices,
+parallelize only independent slices, and verify each working increment. No review
+loop.
+```
+
+**Direct issue fix:**
+
+```text
+Use conductor with gpt-5.6-luna at medium to fix this issue. Run built-in checks and report; no review loop.
 ```
 
 **Plan without implementing:**
@@ -86,7 +124,9 @@ Use conductor to plan [task]. Write the plan to [path]. Include task dependencie
 **Request a review loop:**
 
 ```text
-Use conductor to review and fix [scope]. Use two reviewers per round, for up to three rounds or until there is no valid actionable feedback. Verify fixes and report anything unresolved.
+Use conductor to review and fix [scope]. Explicitly use two reviewers per round,
+for up to three rounds or until there is no valid actionable feedback. Verify
+fixes and report anything unresolved.
 ```
 
 **Delegate to GLM:**

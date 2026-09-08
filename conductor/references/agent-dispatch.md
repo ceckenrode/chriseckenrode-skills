@@ -5,13 +5,27 @@
 1. Identify the actual host and available dispatch tools from the current runtime; do not assume this skill runs in Codex, Claude Code, or any particular CLI. Honor an explicitly requested backend. A requested model alone does not imply an external CLI.
 2. Otherwise prefer the current host's native subagents: in Claude Code use its native Claude subagents; in Codex use its native subagent tools; in another host use its supported native mechanism. Inspect exposed capabilities rather than assuming tool names or copying another host's schema. Keep dispatch, follow-ups, monitoring, and result collection on that native mechanism.
 3. If native dispatch is unavailable or cannot provide the requested worker, choose an installed, authenticated CLI compatible with the user's model/backend constraints. Prefer the current host's CLI when suitable; do not assume Codex or Claude is installed or make either a universal fallback. Read the selected section of [CLI workers](cli-workers.md), check its help, and announce the fallback and reason once. For another CLI, use its available documentation and actual schema instead of inventing flags. If no compatible backend is available, report the blocker.
-4. Preserve requested models and effort across dispatch. When unspecified, use the selected runtime's defaults. A backend fallback does not authorize a model substitution. Native task failures, slow work, or permission denials are not by themselves reasons to switch backends or bypass host restrictions.
+4. Preserve requested models and effort across configured-stage dispatch. Before
+   dispatch, ask for any missing model or effort for an included stage; never
+   silently use a runtime default. A backend fallback does not authorize a model
+   substitution.
+   Native task failures, slow work, or permission denials are not by themselves
+   reasons to switch backends or bypass host restrictions. See [exploration](exploration.md)
+   for the narrow authorized internal read-only gathering exception.
 
 For native calls, inspect the actual tool schema for models, context/fork options, concurrency, and waits. Select a context option compatible with any model override. Agents may inherit history: write for the context they will actually receive.
 
 Spawn with full permissions by default unless the user requests restrictions. Native agents inherit runtime permissions; request full access only through options the tool actually exposes. CLI workers use the full-permission flags documented in their bundled reference. Assignment scope still controls what a worker should do.
 
-For an explicitly requested external provider, use its supplied adapter while retaining these assignment and completion contracts.
+Preserve git authorization in every brief: workers do not commit, stage, amend,
+tag, or push, and do not write git history, unless the user explicitly requests
+those actions. Read-only exploration and review remain read-only.
+
+For an explicitly requested external provider, use native or otherwise compatible
+CLI capabilities with these assignment and completion contracts. A companion adapter
+skill may be used only when the user explicitly asks for that skill; it is never a
+prerequisite. Discover actual provider, model, authentication, and command support;
+do not invent flags or silently substitute an unavailable backend.
 
 ## Brief
 
@@ -28,6 +42,8 @@ Validation: relevant checks and what they establish, when applicable.
 Checkpoints: when to report progress, what evidence to include, and when to request a decision.
 Report: result, evidence, verification, unresolved issues; keep it concise.
 ```
+
+Workers end every report with one status line: `DONE` (with the evidence requested), `NEEDS_DECISION` (the missing fact or choice, its options, and their consequences), or `NOT FOUND` (where they looked). The status is a claim; the orchestrator judges the evidence before releasing dependent work.
 
 Give known file/type leads to avoid rediscovery. Link long plans and identify relevant sections. For implementers, include the exact assigned requirements, binding examples/interfaces, and verification gates. Leave only mechanical choices open; ask workers to report missing design decisions with evidence and options instead of guessing.
 

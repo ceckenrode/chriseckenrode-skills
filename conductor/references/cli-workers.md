@@ -4,7 +4,16 @@ These are optional backend recipes, not assumptions about the orchestrator's hos
 
 Use a task-specific temporary directory for briefs and output. Supply a self-contained brief: a new CLI session has no parent conversation unless explicitly resumed. Run in the intended project, use existing authentication, and capture the process handle plus returned session ID.
 
-Check the installed CLI's help before first use; supported flags can change. Preserve requested models and effort; omit overrides when unspecified. The commands below use full permissions by default, as requested. Use restricted modes only when the user requests them or the host requires them; report host-enforced limits.
+Check the installed CLI's help before first use; supported flags can change.
+Preserve the complete workflow settings settled before dispatch. Omit model or
+effort flags only when the user explicitly chose inherited/current settings;
+never infer an unspecified value here. The commands below use full permissions
+by default, as requested. Use restricted modes only when the user requests them
+or the host requires them; report host-enforced limits.
+
+For authorized internal exploration only, an orchestrator-selected supported
+model and effort may be passed explicitly when native dispatch is unavailable;
+this exception does not apply to user-facing configured stages.
 
 ## Codex
 
@@ -51,6 +60,16 @@ Capture `session_id` from JSON. Continue related work using the explicit ID:
 cd "$project_path" && claude -p --resume "$session_id" --dangerously-skip-permissions \
   --output-format json < "$followup_path"
 ```
+
+## OpenCode (GLM)
+
+Use when the user explicitly requests a GLM model or OpenCode is the selected
+compatible fallback. If `spawn-glm` is installed and explicitly requested, follow
+its SKILL.md for preflight, wrapper command, log redirection, and session reuse.
+Otherwise inspect the installed `opencode` help and actual authentication/model
+availability, then use only supported commands and report a real compatibility
+blocker if none exists. The adapter is optional; do not invent flags or require it
+for ordinary dispatch.
 
 ## Completion
 

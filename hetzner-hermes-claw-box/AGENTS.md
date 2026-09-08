@@ -34,5 +34,6 @@ Before handing work back, run syntax checks for edited shell scripts:
 bash -n <script>
 ```
 
-Prefer `shellcheck` when available. New user-facing flows should be documented in the
-skill's SKILL.md and README.md.
+Prefer `shellcheck` when available. Document each user-facing flow once: the agent
+procedure in SKILL.md or `references/`, with at most a one-line pointer in README.md.
+Do not duplicate detail between them.

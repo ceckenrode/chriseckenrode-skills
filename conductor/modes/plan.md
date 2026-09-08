@@ -3,17 +3,49 @@
 Plan for an implementer with less capability and context than the orchestrator. Make design decisions explicit enough that correct execution depends on following the plan, not reconstructing your reasoning. Use the user's format or project conventions; scale detail to uncertainty and risk rather than adding boilerplate.
 
 1. Identify intended behavior, constraints, existing decisions, and acceptance criteria.
-2. Delegate context gathering as focused questions about relevant documents, code, extension points, state, and tests. Request distilled, anchored findings and material risks. Follow up only on unknowns that affect the plan.
+2. For an authorized planning or exploration run, apply the bounded internal-exploration guidance in [exploration](../references/exploration.md): automatically select focused, read-only small-model workers to navigate and absorb raw context, then return distilled, anchored findings and material risks. Keep architecture, planning, and decisions with the orchestrator; follow up only on unknowns that affect the plan. Help and bare usage remain non-dispatching.
 3. Synthesize findings into a direction. Weigh proposed approaches, make creative and architectural decisions, and distinguish current behavior from intended behavior. Resolve contradictions through targeted worker questions or a user decision; record assumptions and rationale.
 4. Decompose the work into a dependency graph and implementation-ready tasks using the contracts below. Resolve consequential choices before dispatch and record why the selected approach fits the evidence.
+5. Check the complete selected configuration and approval checkpoints against
+   [workflow setup](../references/workflow.md) before handing off the plan. Leave
+   any unresolved settings explicit; only the bounded exploration exception may
+   proceed while they are pending.
+
+If plan review is selected, send the plan to that stage after this gate; do not
+skip it merely because implementation is ready. In plan-only mode, verify the
+plan and leave the next selected stage explicit in the handoff.
+
+## Tracer-bullet slices
+
+Organize implementation as thin end-to-end vertical slices that connect the
+relevant layers and produce observable working behavior after each slice. The
+first slice proves the minimal real path; later slices expand capability. Do not
+call a horizontal service/UI split a slice. Add shared scaffolding first only
+when truly necessary. Each slice names its observable outcome, write ownership,
+off-limits scope, dependencies, and meaningful same-task red → green check where
+applicable, and leaves the repository working.
+
+Independent slices may run in parallel when their writes and resources are
+disjoint; coupled slices remain ordered.
 
 ## Parallel task graph
 
-Design for concurrent implementation where the work permits it. Separate independent work by behavior/module and define shared interfaces before assigning their consumers. Put required shared scaffolding or schema changes in prerequisite tasks; avoid concurrent edits to the same files or shared generated artifacts. Keep coupled work together when splitting would create more coordination than useful parallelism.
+Design the slice dependency graph and define shared interfaces before assigning
+consumers. Put required shared scaffolding or schema changes in prerequisite
+tasks; avoid concurrent edits to the same files or shared generated artifacts.
 
-Give every task a stable ID and record `depends_on`, `blocks`, write ownership, and the verification gate that releases its dependents. Include an ordered task table and parallel waves, for example: `T1 (shared contract) → [T2 (service), T3 (UI)] → T4 (integration)`. Explain why each dependency exists; `blocks` must agree with downstream `depends_on` entries.
+Give every slice/task a stable ID and record `depends_on`, `blocks`, write
+ownership, and the verification gate that releases its dependents. Include an
+ordered slice table and parallel waves, for example:
+`S1 (submit → persist → display) → [S2 (edit), S3 (history)] → S4 (sync)`.
+Explain why each dependency exists; `blocks` must agree with downstream
+`depends_on` entries.
 
-Check the graph for cycles, missing prerequisites, overlapping writes within a wave, and shared test/build resources that need isolation or serialization. Identify the critical path and tasks ready at the start. Waves describe valid ordering, not a requirement to wait for unrelated work before starting a newly ready task.
+Check the graph for cycles, missing prerequisites, overlapping writes within a
+wave, and shared test/build resources that need isolation or serialization.
+Identify the critical path and tasks ready at the start. Waves describe valid
+ordering, not a requirement to wait for unrelated work before starting a newly
+ready independent slice.
 
 ## Task contract
 
@@ -35,4 +67,4 @@ A worker returning `NEEDS_DECISION` should supply the missing fact or choice and
 
 Save the plan using the location precedence in the bundled context reference: explicit path, the user's established plan location, then the run's temporary folder. A small plan can remain short, but it still records ordering, gates, and the tasks that can run together.
 
-Planning is complete when every task has an actionable design, graph position, acceptance criteria, and runnable or explicitly blocked verification gates. Check that no consequential choice is left for the implementer to invent. Delegate investigation only for gaps that prevent that. Write the plan-to-execution handoff with the initial ready tasks and blockers. In plan-only mode, present the plan and handoff and stop; otherwise continue under the main workflow's checkpoint policy.
+Planning is complete when every task has an actionable design, graph position, acceptance criteria, and runnable or explicitly blocked verification gates. Check that no consequential choice is left for the implementer to invent. Delegate investigation only for gaps that prevent that. Write a handoff naming the actual next selected stage, with the initial ready tasks and blockers. If plan review is selected, continue there; otherwise, when no implementation is selected, verify and report the plan, and when implementation is selected, continue to execution under the main workflow's checkpoint policy.
