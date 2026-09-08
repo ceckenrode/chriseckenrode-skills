@@ -27,7 +27,6 @@ For boxes installed from the GitHub raw URL before this change, upload the updat
 script first: scp openclaw-vps.sh root@<ts-ip>:/root/openclaw-vps.sh
 If exactly one box is recorded, --box can be omitted. State defaults to
 PROJECT_DIR/boxes.json. Requires jq and SSH; wrappers live in PROJECT_DIR.
-Use a working directory outside skill folders; skill contents stay stateless.
 
 register options (non-secret values only):
   --runtime hermes|openclaw --box NAME --server-id ID --server-type TYPE
@@ -40,15 +39,6 @@ Confirmations remain interactive; no --yes or arbitrary remote commands accepted
 USAGE
 }
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
-assert_runtime_directory() {
-  local directory="$1"
-  directory="$(cd -- "$directory" && pwd -P)"
-  while :; do
-    [[ ! -f "$directory/SKILL.md" ]] || fail 'Runtime files must be outside skill folders; choose a separate --project-dir and output paths'
-    [[ "$directory" != / ]] || break
-    directory="$(dirname -- "$directory")"
-  done
-}
 cleanup() {
   [[ -z "$TEMP_FILE" ]] || rm -f -- "$TEMP_FILE"
   [[ -z "$LOCK_DIR" ]] || rmdir -- "$LOCK_DIR"
@@ -84,12 +74,10 @@ esac
 command -v jq >/dev/null || fail 'jq is required; install it with your system package manager'
 [[ -d "$PROJECT_DIR" ]] || fail "Missing project directory: $PROJECT_DIR"
 PROJECT_DIR="$(cd -- "$PROJECT_DIR" && pwd -P)"
-assert_runtime_directory "$PROJECT_DIR"
 STATE_FILE="${STATE_FILE:-$PROJECT_DIR/boxes.json}"
 [[ "$STATE_FILE" == /* ]] || STATE_FILE="$PROJECT_DIR/$STATE_FILE"
 [[ -d "$(dirname -- "$STATE_FILE")" ]] || fail 'State parent directory must exist'
 STATE_FILE="$(cd -- "$(dirname -- "$STATE_FILE")" && pwd -P)/$(basename -- "$STATE_FILE")"
-assert_runtime_directory "$(dirname -- "$STATE_FILE")"
 [[ "$STATE_FILE" == "$PROJECT_DIR/"* ]] || fail 'State must be inside the project so it can be gitignored'
 [[ "$STATE_FILE" == *.json && "$STATE_FILE" != *.example.json && "$STATE_FILE" != "$PROJECT_DIR/.git/"* ]] || fail 'Use a local .json state filename, not an example or git metadata'
 [[ ! -L "$STATE_FILE" ]] || fail 'Refusing symlink state file'

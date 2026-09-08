@@ -10,9 +10,9 @@ Repository: [ceckenrode/chriseckenrode-skills](https://github.com/ceckenrode/chr
 
 | Skill | What it does |
 | --- | --- |
-| [conductor](conductor/SKILL.md) | User-invoked orchestration aiming to save the lead model's tokens by delegating work to smaller models. The lead owns direction, planning, supervision, and verification. Supports parallel work, configurable review loops, and built-in usage help. |
-| [spawn-glm](spawn-glm/SKILL.md) | Runs a GLM worker through OpenCode and the Z.AI coding plan. Defaults to `zai-coding-plan/glm-5.3`; respects explicit model choices. Adds no orchestration or review workflow of its own. |
-| [hetzner-hermes-claw-box](hetzner-hermes-claw-box/SKILL.md) | User-invoked setup and management for Tailscale-only Hetzner boxes running Hermes or OpenClaw. OpenClaw setup includes a dashboard URL handoff and PWA installation guidance. Credentials and box state stay in a separate working directory, outside the skill. |
+| [conductor](conductor/README.md) | User-invoked orchestration aiming to save the lead model's tokens by delegating work to smaller models. The lead owns direction, scope, synthesis, supervision, and verification; planning stays with the lead by default, while an explicitly requested planning worker can make architectural decisions within that scope. Supports parallel work, configurable review loops, and built-in usage help. |
+| [spawn-glm](spawn-glm/README.md) | Runs a GLM worker through OpenCode and the Z.AI coding plan. Defaults to `zai-coding-plan/glm-5.3`; respects explicit model choices. Adds no orchestration or review workflow of its own. |
+| [hetzner-hermes-claw-box](hetzner-hermes-claw-box/README.md) | User-invoked setup and management for Tailscale-only Hetzner boxes running Hermes or OpenClaw. OpenClaw setup includes a dashboard URL handoff and PWA installation guidance. Credentials and box state stay in a separate working directory, outside the skill. |
 
 Conductor uses the current host's native subagents when available—including
 Claude-native subagents in Claude Code—and selects a compatible CLI only when
@@ -85,16 +85,29 @@ For Codex use `~/.codex/skills` instead.
 Conductor and hetzner-hermes-claw-box are user-invoked only; the agent must not
 activate either on its own. Start
 with `$conductor help` in Codex or `/conductor help` in Claude Code for examples
-and guidance. Start with the goal, then settle the user-configured stages' models and
-reasoning effort up front; reviews remain opt-in. Describe the arrangement you
-want in plain language.
+and guidance. Start with the goal, then settle the complete configuration for
+every selected stage up front: owner, model, reasoning effort, worker count,
+checkpoints, review/fix caps, integration owner, and stopping rules where
+relevant. Reviews remain opt-in. Describe the arrangement you want in plain
+language.
 
 After an authorized planning or exploration request starts, Conductor may
 automatically delegate bounded, read-only navigation and raw-context gathering to
 suitable small native models, which return distilled, anchored evidence while the
-orchestrator retains architecture, planning, and decisions. This does not run
+lead retains scope and acceptance. An explicitly selected planning worker owns
+the architectural and planning decisions within that scope. This does not run
 from help or a bare invocation, and it does not replace settings for
 implementation, review, fixes, or final verification.
+
+When no explicit or inherited planner configuration is available, planning uses
+the current orchestrator model and reasoning effort by default; no
+planner configuration is required. If you explicitly request a specific
+planning model or a planning subagent, Conductor delegates planning to that
+worker: it makes the architectural decisions within the lead's scope, while the
+lead retains scope, acceptance, and synthesis. Ask for a lite
+or detailed plan, or let Conductor choose the depth from complexity and risk;
+settle any resulting stage settings before work starts. The multi-stage example
+below explicitly selects `gpt-6-astra` as its planner.
 
 After installation, refer to the skill by name in ordinary chat. Replace the
 bracketed task or path with your own. Hosts that support skill mentions can also
@@ -108,6 +121,41 @@ first slice prove the minimal real path end to end, expand it in later slices,
 parallelize only independent slices, and verify each working increment. No review
 loop.
 ```
+
+**Configure a multi-stage workflow:**
+
+```text
+$conductor plan the fix with one gpt-6-astra planner at high reasoning;
+after the plan passes its gate, implement it with 3 parallel gpt-5.6-luna
+subagents at medium reasoning and disjoint ownership; then run up to 3
+code-review/fix loops, using 2 parallel gpt-5.6-sol reviewers at high reasoning
+in each round and up to 3 parallel gpt-5.6-terra review fixers at high reasoning.
+Stop early when a review round has no actionable findings.
+```
+
+**Use the default planner for a lightweight workflow:**
+
+```text
+$conductor use a lite plan for this small fix with the current orchestrator
+model and reasoning effort; then implement it with one gpt-5.6-luna worker at
+medium reasoning, run the built-in checks, and do not start a review loop.
+```
+
+**Reuse accepted settings on the next run, with one override:**
+
+```text
+$conductor use the most recent accepted run workflow configuration available in
+this conversation or handoff for this related task; override only the
+implementation stage with 2 parallel gpt-5.6-luna workers at medium reasoning.
+Keep its selected stages, gates, integration owner, stopping rules, and any
+delegated planner model, effort, and owner. If no explicit or inherited planner
+configuration exists, use the current orchestrator by default. Do not reuse the
+prior task's state or authorization.
+```
+
+Conductor can recover an interrupted run from the latest available handoff or
+ledger. If those are missing or stale, it reconstructs state from the actual
+partial work, reports gaps, and does not infer authorization for new work.
 
 **Direct issue fix:**
 

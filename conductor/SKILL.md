@@ -12,9 +12,11 @@ Activate only when the user explicitly invokes Conductor through a skill mention
 `/conductor`, or an explicit request. Help and bare usage discover intent but do
 not dispatch workers, write run artifacts, or start implementation.
 
-The lead owns scope, architecture, decisions, synthesis, steering, and
-acceptance. Workers receive bounded assignments and return evidence; they do not
-invent product or workflow decisions. Conductor is self-contained and
+The lead owns scope, steering, and acceptance. When a planning worker is
+explicitly selected, that worker owns the plan's architectural decisions and
+synthesis within the accepted scope; the lead steers the scope and accepts or
+corrects the result. Implementers follow the settled plan, while reviewers and
+fixers stay within their assigned contracts. Conductor is self-contained and
 host-agnostic: prefer native workers, and use a compatible CLI only when
 requested or needed.
 
@@ -40,9 +42,11 @@ stages run. Reviews and independent verifiers are opt-in.
 ## Run
 
 1. Identify the requested branch, scope, constraints, and acceptance criteria.
-   Read [workflow setup](references/workflow.md). Settle the complete settings
-   for selected user-configured roles; authorized read-only exploration may
-   precede unresolved downstream settings under [exploration](references/exploration.md).
+   Read [workflow setup](references/workflow.md). Resolve the complete selected
+   workflow configuration up front, reusing the last accepted configuration from
+   the available conversation or supplied ledger/handoff and merging explicit
+   overrides. Internal exploration may gather context, but it does not defer
+   configuration for a later stage.
 2. Read [context and handoffs](references/context-handoffs.md) and
    [agent dispatch](references/agent-dispatch.md). Restore supplied plans,
    findings, or handoffs when present; a fresh direct task needs only a bounded
@@ -55,7 +59,9 @@ stages run. Reviews and independent verifiers are opt-in.
    findings fix does not launch a fresh review.
 4. Monitor, synthesize, and steer. Advance only when acceptance criteria and
    required gates have checkable evidence; otherwise hold dependents and report
-   the blocker. Preserve read-only scope where selected.
+   the blocker. If the user redirects or stops the run, stop affected workers,
+   capture partial changes and evidence, invalidate stale verification, and
+   preserve unrelated work. Preserve read-only scope where selected.
 5. Complete the selected branch's verification, then report changed paths,
    checks/results, unresolved items, and limitations. Do not add an unrequested
    stage, verifier, review round, commit, staging, or push.

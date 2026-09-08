@@ -5,13 +5,17 @@
 1. Identify the actual host and available dispatch tools from the current runtime; do not assume this skill runs in Codex, Claude Code, or any particular CLI. Honor an explicitly requested backend. A requested model alone does not imply an external CLI.
 2. Otherwise prefer the current host's native subagents: in Claude Code use its native Claude subagents; in Codex use its native subagent tools; in another host use its supported native mechanism. Inspect exposed capabilities rather than assuming tool names or copying another host's schema. Keep dispatch, follow-ups, monitoring, and result collection on that native mechanism.
 3. If native dispatch is unavailable or cannot provide the requested worker, choose an installed, authenticated CLI compatible with the user's model/backend constraints. Prefer the current host's CLI when suitable; do not assume Codex or Claude is installed or make either a universal fallback. Read the selected section of [CLI workers](cli-workers.md), check its help, and announce the fallback and reason once. For another CLI, use its available documentation and actual schema instead of inventing flags. If no compatible backend is available, report the blocker.
-4. Preserve requested models and effort across configured-stage dispatch. Before
-   dispatch, ask for any missing model or effort for an included stage; never
-   silently use a runtime default. A backend fallback does not authorize a model
-   substitution.
+4. Preserve explicit and inherited models and effort across configured-stage
+   dispatch. Resolve the complete workflow configuration before dispatch; do not
+   reset an inherited planner, per-stage override, or effort to a runtime
+   default. Planning performed by the lead/orchestrator is not dispatched and
+   uses its current model and effort only when no explicit or inherited planning
+   worker/model is selected. An explicitly named planning model is honored even
+   when it matches the current model, and a backend fallback does not authorize a
+   model substitution.
    Native task failures, slow work, or permission denials are not by themselves
    reasons to switch backends or bypass host restrictions. See [exploration](exploration.md)
-   for the narrow authorized internal read-only gathering exception.
+   for the narrow authorized internal read-only gathering contract.
 
 For native calls, inspect the actual tool schema for models, context/fork options, concurrency, and waits. Select a context option compatible with any model override. Agents may inherit history: write for the context they will actually receive.
 
@@ -20,6 +24,13 @@ Spawn with full permissions by default unless the user requests restrictions. Na
 Preserve git authorization in every brief: workers do not commit, stage, amend,
 tag, or push, and do not write git history, unless the user explicitly requests
 those actions. Read-only exploration and review remain read-only.
+
+For implementation briefs, name the explicit shared-contract owner and
+integration owner. The integration owner accepts the combined state and runs
+combined-state gates; a worker's individual green check is not integration
+evidence. If the user stops or redirects the run, stop affected workers, capture
+partial changes and evidence, invalidate verification tied to the old contract,
+and preserve unrelated work.
 
 For an explicitly requested external provider, use native or otherwise compatible
 CLI capabilities with these assignment and completion contracts. A companion adapter
@@ -45,9 +56,9 @@ Report: result, evidence, verification, unresolved issues; keep it concise.
 
 Workers end every report with one status line: `DONE` (with the evidence requested), `NEEDS_DECISION` (the missing fact or choice, its options, and their consequences), or `NOT FOUND` (where they looked). The status is a claim; the orchestrator judges the evidence before releasing dependent work.
 
-Give known file/type leads to avoid rediscovery. Link long plans and identify relevant sections. For implementers, include the exact assigned requirements, binding examples/interfaces, and verification gates. Leave only mechanical choices open; ask workers to report missing design decisions with evidence and options instead of guessing.
+Give known file/type leads to avoid rediscovery. Link long plans and identify relevant sections. For implementers, include the exact assigned requirements, binding examples/interfaces, and verification gates. Leave only mechanical choices open for implementers; ask them to report missing design decisions with evidence and options instead of guessing. A selected planning worker is explicitly authorized to make the plan's architectural decisions within the accepted scope and must record the rationale; reviewers and fixers follow the settled plan unless an accepted finding routes a plan correction back to its planning owner.
 
-For weaker models, spell out behavior that a stronger implementer might infer: boundary/error cases, ordering, cleanup/lifecycle obligations, exact user-visible states, and which existing abstraction should own the change. Explain the reason for non-obvious constraints so the worker preserves the intent when local details differ. Before dispatch, check that the brief can be followed without inventing a missing design decision.
+For weaker models, spell out behavior that a stronger implementer might infer: boundary/error cases, ordering, cleanup/lifecycle obligations, exact user-visible states, and which existing abstraction should own the change. Explain the reason for non-obvious constraints so the worker preserves the intent when local details differ. Before dispatch, check that an implementation brief can be followed without inventing a missing design decision; a selected planning brief may leave architectural choices to the planning worker within the accepted scope.
 
 Investigators and reviewers are read-only. Request file/line anchors, minimal supporting excerpts, and material uncertainties. A `NOT FOUND` report should include where the worker looked; assess the evidence before deciding on another search or model.
 

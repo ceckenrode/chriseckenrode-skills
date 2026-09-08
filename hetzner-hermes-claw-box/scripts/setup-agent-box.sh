@@ -30,24 +30,12 @@ Ask Hermes or OpenClaw first, choose a Hetzner server type/location, then
 prepare credentials, SSH keys, and bundled provisioning/management scripts.
 Output files must be inside the target project. Existing secrets are preserved
 unless you agree to replace them. This helper does not create a paid server.
-Use a working directory outside skill folders; skill contents stay stateless.
 SSH private keys must be outside the target project (for example, ~/.ssh/...).
 After a successful install, run ./agent-box-manage.sh register to seed boxes.json.
 Renamed from setup-hermes-env.
 USAGE
 }
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
-assert_runtime_directory() {
-  local directory="$1"
-  # Resolve existing ancestors physically, including symlinked output parents.
-  while [[ ! -d "$directory" ]]; do directory="$(dirname -- "$directory")"; done
-  directory="$(cd -- "$directory" && pwd -P)"
-  while :; do
-    [[ ! -f "$directory/SKILL.md" ]] || fail 'Runtime files must be outside skill folders; choose a separate --project-dir and output paths'
-    [[ "$directory" != / ]] || break
-    directory="$(dirname -- "$directory")"
-  done
-}
 while (($#)); do
   case "$1" in
     -h|--help) usage; exit 0 ;;
@@ -92,7 +80,6 @@ output_path() {
   [[ "$path" == /* ]] || path="$PROJECT_DIR/$path"
   [[ -d "$(dirname -- "$path")" ]] || fail "Missing output directory: $path"
   path="$(cd -- "$(dirname -- "$path")" && pwd -P)/$(basename -- "$path")"
-  assert_runtime_directory "$(dirname -- "$path")"
   [[ "$path" == "$PROJECT_DIR/"* ]] || fail "Output must be inside $PROJECT_DIR"
   [[ ! -L "$path" ]] || fail "Refusing symlink output: $path"
   REPLY="$path"
@@ -203,7 +190,6 @@ while :; do
 done
 [[ -d "$PROJECT_DIR" ]] || fail "Project directory does not exist: $PROJECT_DIR"
 PROJECT_DIR="$(cd -- "$PROJECT_DIR" && pwd -P)"
-assert_runtime_directory "$PROJECT_DIR"
 output_path "${ENV_FILE:-.env}"; ENV_FILE="$REPLY"
 output_path "${ENV_EXAMPLE_FILE:-.env.example}"; ENV_EXAMPLE_FILE="$REPLY"
 output_path "${CREDENTIALS_FILE:-credentials.txt}"; CREDENTIALS_FILE="$REPLY"
@@ -310,7 +296,6 @@ ask "SSH private key path [$DEFAULT_KEY_PATH]" optional no "$DEFAULT_KEY_PATH"
 KEY_PATH="${REPLY/#\~/$HOME}"
 [[ "$KEY_PATH" == /* ]] || KEY_PATH="$PROJECT_DIR/$KEY_PATH"
 [[ "$KEY_PATH" != "$PROJECT_DIR"/* ]] || fail "SSH private key must be outside the project; use a path such as ~/.ssh/agentbox_hetzner_ed25519"
-assert_runtime_directory "$(dirname -- "$KEY_PATH")"
 if [[ -e "$KEY_PATH" ]]; then
   [[ -f "$KEY_PATH.pub" ]] || fail "Missing public key: $KEY_PATH.pub (recover it with ssh-keygen -y)"
   ask 'SSH key passphrase (blank for none)' optional yes; PASSPHRASE="$REPLY"

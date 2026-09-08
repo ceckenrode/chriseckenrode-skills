@@ -699,7 +699,7 @@ configure_incus_container_os() {
   local container
   container="$(group_container_name "$group_id")"
   log "installing sandbox container packages and timezone for group ${group_id}"
-  incus_exec_bash "$group_id" "export DEBIAN_FRONTEND=noninteractive; for attempt in {1..30}; do apt-get update && break; sleep 2; done; apt-get install -y ca-certificates curl file git gnupg jq openssh-client openssh-server python3 python3-pip python3-venv pipx ripgrep sudo tar tmux tzdata unzip zip; curl -fsSL 'https://deb.nodesource.com/setup_${NODE_MAJOR}.x' -o /tmp/nodesource_setup.sh; bash /tmp/nodesource_setup.sh; rm -f /tmp/nodesource_setup.sh; apt-get install -y nodejs; systemctl enable --now ssh.service || systemctl enable --now ssh || true"
+  incus_exec_bash "$group_id" "export DEBIAN_FRONTEND=noninteractive; for attempt in {1..30}; do apt-get update && break; sleep 2; done; apt-get install -y build-essential ca-certificates curl file git gnupg jq openssh-client openssh-server python3 python3-pip python3-venv pipx ripgrep sudo tar tmux tzdata unzip zip; curl -fsSL 'https://deb.nodesource.com/setup_${NODE_MAJOR}.x' -o /tmp/nodesource_setup.sh; bash /tmp/nodesource_setup.sh; rm -f /tmp/nodesource_setup.sh; apt-get install -y nodejs; systemctl enable --now ssh.service || systemctl enable --now ssh || true"
   if ! incus exec "$container" -- id -u "$APP_USER" >/dev/null 2>&1; then
     incus exec "$container" -- useradd --create-home --shell /bin/bash "$APP_USER"
   fi
@@ -1682,11 +1682,12 @@ run_as_user() {
 }
 {
   echo "backup started \$(date -u --iso-8601=seconds)"
+  find /home/openclaw/.openclaw/chrome-profile -maxdepth 1 -type l -name "Singleton*" -delete 2>/dev/null || true
   run_as_user "openclaw backup create --verify --output '\$BACKUP_DIR'"
   while IFS= read -r container; do
     [[ -n "\$container" ]] || continue
     incus_backup="\$BACKUP_DIR/incus-\$container-\$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
-    incus export "\$container" "\$incus_backup" --instance-only --force
+    incus export "\$container" "\$incus_backup" --instance-only
   done < <(jq -r '.groups[]?.container' "\$GROUPS_FILE")
   find "\$BACKUP_DIR" -type f -name '*openclaw-backup.tar.gz' -mtime +30 -delete
   find "\$BACKUP_DIR" -type f -name 'incus-*.tar.gz' -mtime +14 -delete

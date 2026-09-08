@@ -9,9 +9,12 @@ evidence, gates, and unresolved questions. Re-read it after resume or context
 compaction before dispatch.
 
 For automatic internal exploration, use the shared [exploration contract](exploration.md)
-for selection, scope, and stopping. Exploration remains read-only and is evidence for
-planning; it does not settle or bypass settings for implementation, review,
-fixes, or a requested independent verifier.
+for selection, scope, and stopping. Resolve the complete selected workflow
+configuration before exploration. Exploration remains read-only and is evidence
+for planning; it does not settle or bypass settings for implementation, review,
+fixes, or a requested independent verifier. A selected planning worker may make
+architectural decisions from the evidence; the lead steers scope and accepts the
+plan.
 
 For plans, use this order:
 
@@ -37,9 +40,10 @@ Each handoff contains:
 - Changed paths and relevant evidence/prototype paths; verification performed, results, and remaining gates.
 - For reviews: reviewed baseline/state, reviewer IDs/models, accepted/rejected/fixed/deferred findings, and remaining round allowance.
 - The agreed workflow configuration: selected sequence; included role owner,
-  model, effort, separate caps, round limits/overrides, checkpoints, and final
-  verification. Later user changes resolve affected settings before dispatch;
-  settled choices are preserved.
+  model, effort, separate caps, round limits/overrides, checkpoints, explicit
+  integration owner, shared-contract owner, and final verification. Later user
+  changes resolve affected settings before dispatch; settled choices are
+  preserved.
 - The next action, its prerequisites, and the worker/session IDs useful for resumption.
 
 When exploration contributed evidence, also record the focused questions or areas,
@@ -50,6 +54,12 @@ Reuse the report contract in [agent dispatch](agent-dispatch.md) and the policy 
 [exploration](exploration.md); do not copy raw logs or repeat its policy.
 
 Reference plans and evidence instead of duplicating their contents. Include enough context to explain intentional choices and prevent the next worker from rediscovering settled facts. The orchestrator authors the handoff from distilled reports; no external skill is needed.
+
+On a new run, reuse the last accepted workflow configuration available in the
+conversation or supplied ledger/handoff, then merge explicit overrides. This
+reuse does not carry forward the old task scope, findings, plan state, round
+counters, or Git authorization, and it does not create persistent or global
+settings when no source provides a value.
 
 ## Read before work
 

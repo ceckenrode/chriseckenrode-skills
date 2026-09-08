@@ -14,7 +14,9 @@ review. A later review or review loop requires an explicit user request.
    first; then reject or defer unsupported findings with a recorded reason, and
    return `NEEDS_DECISION` only when ambiguity changes behavior or scope.
 3. For plan-review findings, limit writes to the plan and handoff artifacts and
-   verify that implementation remains gated by the corrected plan. Product-code
+   verify that implementation remains gated by the corrected plan. When a
+   finding changes architecture, route the correction to the selected planning
+   owner/worker; the lead steers scope and accepts the result. Product-code
    findings retain their assigned write ownership and off-limits paths.
 
 ## Fix and verify
@@ -24,7 +26,10 @@ review. A later review or review loop requires an explicit user request.
    fixer the finding ID, exact ownership, expected behavior, and affected gates.
 2. Apply the smallest authorized correction. For meaningful production behavior,
    preserve a failing regression check before the fix and a passing check after it.
-   Documentation/configuration fixes receive appropriate direct checks.
+   Documentation/configuration fixes receive appropriate direct checks. When
+   shared contracts or multiple workers are affected, the explicit integration
+   owner runs combined-state checks; individual green checks are not integration
+   evidence.
 3. Re-read every original finding and verify its trigger, changed paths, commands,
    results, and evidence-backed resolution. Run integration checks when shared
    behavior changed. A failed, skipped, or unavailable required gate remains

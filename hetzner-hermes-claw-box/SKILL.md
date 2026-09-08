@@ -1,26 +1,15 @@
 ---
-name: hetzner-hermes-claw-box
-description: User-invoked setup and management for Hermes Agent or OpenClaw on Hetzner Cloud, including server selection, credentials, Tailscale, agents, groups, dashboards, status, maintenance, and inventory. Use only when the user explicitly invokes hetzner-hermes-claw-box.
-disable-model-invocation: true
-allowed-tools: Bash, Read, Write, Edit, Grep, Glob
+name: hetzner-agent-box
+description: Use when setting up either Hermes Agent or OpenClaw on Hetzner Cloud, choosing a server type or location, configuring Hetzner/model-provider/Telegram/Tailscale/SSH credentials, managing existing boxes or agents, adding groups or OpenClaw agents, or running status, doctor, logs, backup, maintenance, refresh-config and inventory commands.
+allowed-tools: Bash, Read, Write, Edit
 ---
 
-# Hetzner Hermes / Claw Box
-
-This skill is user-invoked only. Activate it only when the user explicitly invokes
-`hetzner-hermes-claw-box` through a skill mention, `/hetzner-hermes-claw-box`, or
-an explicit request to use this skill. Do not select it automatically for a
-matching Hetzner, Hermes, OpenClaw, server, or deployment task. Installation alone
-is not authorization to invoke it, collect credentials, or provision resources.
+# Hetzner Agent Box
 
 Standalone Hetzner/VPS provisioning and management for Hermes (Docker groups) and
-OpenClaw (Incus groups and agents).
-
-Keep this skill folder stateless. Use a separate user-selected working directory
-for generated `.env`, `.env.example`, credentials, box inventory, and copied
-runtime scripts. The helpers reject project/output paths inside folders containing
-`SKILL.md`, including nested directories and symlinked aliases. Never run installers
-from the skill folder; run the prepared copies from the working directory.
+OpenClaw (Incus groups and agents). Renamed from `setup-hermes-env`. The four root
+provisioning filenames and existing remote paths remain stable. This skill does
+not install AgentBox core.
 
 ## Choose the flow
 
@@ -35,13 +24,14 @@ operations. Never print secret files into chat or commit live configuration.
 
 ## First setup
 
-1. Run from the target working directory (which must already exist outside skill folders):
+1. Run from the target project (which must already exist):
 
    ```bash
-   "<skill base directory>/scripts/setup-agent-box.sh" --project-dir "$PWD"
+   /path/to/hetzner-agent-box/scripts/setup-agent-box.sh --project-dir "$PWD"
    ```
 
-   The skill's base directory is reported when this skill loads. The helper asks
+   In this checkout, the entrypoint is
+   `.agents/skills/hetzner-agent-box/scripts/setup-agent-box.sh`. The helper asks
    runtime first, then confirms any existing-file replacements, presents the
    server choices, validates the Hetzner token, and collects runtime credentials.
    It prepares files only; it does not provision a paid box.
@@ -103,12 +93,15 @@ operations. Never print secret files into chat or commit live configuration.
    # ./openclaw-hetzner.sh install
    ```
 
+   Non-interactive stdin order (only when automation is explicitly required):
+   `printf '\nCREATE\n' | ./openclaw-hetzner.sh install` — one empty line for
+   the optional bot-token prompt, then the literal word `CREATE` for the
+   paid-server confirmation.
+
    Use the emitted command if a custom env path was selected. Do not pipe `CREATE`,
    use `yes`, or feed typed confirmations automatically. Hermes host commands are
    opt-in: export `HERMES_HOST_COMMANDS=1` only if the trusted Telegram admin should
-   run named host commands through `host-shell`. Unattended installs are covered in
-   [troubleshooting](references/troubleshooting.md#unattended-install) and used only
-   when the user explicitly requires automation.
+   run named host commands through `host-shell`.
 
 7. Watch for the Tailscale browser URL. When it appears, pause and give the URL to
    the user to open and approve the VPS, then wait for their confirmation before
@@ -136,15 +129,8 @@ operations. Never print secret files into chat or commit live configuration.
    Never put passwords, tokens, or the full installer output in `boxes.json`.
    Both installers print the root password once; adding groups/agents does not
    generate another root password. Keep separate credentials handoff files per
-   box when provisioning several (use `--env-file .env.work --credentials-file
-   credentials-work.txt`).
+   box when provisioning several (use `--credentials-file credentials-work.txt`).
    Run `./agent-box-manage.sh status --box NAME` to check Tailscale reachability.
-
-10. For **OpenClaw (Clawd)**, complete the [dashboard handoff](#dashboard-over-tailscale)
-    before reporting setup complete: enable tailnet-only Serve, verify the actual
-    dashboard URL, give the user that clickable URL, and tell them to download/install
-    the dashboard PWA from their browser. If access or approval is blocked, report
-    that remaining step explicitly rather than claiming the dashboard is ready.
 
 ## Management
 
@@ -168,12 +154,9 @@ there is no public-IP fallback.
 # OpenClaw only:
 ./agent-box-manage.sh add-agent --box personal --agent reviewer --group work
 ./agent-box-manage.sh list --box personal
-./agent-box-manage.sh serve --box personal
-./agent-box-manage.sh serve-off --box personal
 ```
 
 One recorded box is selected automatically; multiple boxes require `--box`.
-`--state FILE` selects another gitignored inventory inside the project.
 `boxes` is local inventory; OpenClaw `list` queries the live VPS.
 
 ### Hermes
@@ -187,8 +170,10 @@ available through the original provisioning scripts (the manager accepts no
 secret flags). They must reach the remote process; merely exporting a VPS-only
 variable locally does not send it over SSH.
 
-Pre-group Hermes installs must be migrated before `add-group`; see
-[troubleshooting](references/troubleshooting.md#hermes-legacy-migration).
+Older pre-group installs must migrate default first: upload the current
+`hermes-vps.sh` to `/root/hermes-vps.sh`, then run default-group `refresh-config`.
+The VPS moves legacy `/var/lib/hermes-vps/hermes-home` into `groups/default/` and
+recreates `hermes-agent-default`. Do not trigger migration with add-group.
 
 ### OpenClaw
 
@@ -199,6 +184,21 @@ act on the whole box: the manager rejects `--group` rather than silently ignorin
 it. Add-agent requires a **new bot token** remotely, unlike the optional bot in
 first setup; an empty allow-from uses pairing. If the group is missing, the VPS
 asks whether to create it.
+
+OpenClaw `agents.json` supports these optional per-agent fields: `subagents` (an
+object with `model`, `thinking`, and `delegationMode`), `skills` (an array that is
+the agent's final set and takes precedence over the `OPENCLAW_AGENT_SKILLS`
+environment setting), `contextInjection`, `bootstrapMaxChars`,
+`bootstrapTotalMaxChars`, `tools`, and `heartbeat`. Agent display names in the
+generated config come from `identity.name`; `label` remains the input field and
+is mapped to `identity.name` in the output.
+
+When `MODEL_CATALOG` is unset, the installer discovers models from the provider's
+OpenAI-compatible `/models` endpoint.
+
+`refresh-config` regenerates managed configuration sections while preserving
+operator-owned `plugins`, `mcp`, `secrets`, and `tools.web` sections. Dashboard
+and plugin changes therefore survive a refresh.
 
 For Telegram pairing, SSH into the box, run `sudo -iu openclaw`, then
 `openclaw pairing list telegram` and `openclaw pairing approve telegram CODE`
@@ -218,19 +218,6 @@ Certificates** in the Tailscale admin console.
 ./agent-box-manage.sh serve --box NAME
 ./agent-box-manage.sh serve-off --box NAME
 ```
-
-Capture the actual HTTPS URL printed by successful `serve` output; never invent the
-hostname or substitute the VPS public IP. Check it from a device connected to the
-same tailnet and confirm the dashboard/login loads. If this environment cannot
-reach the tailnet, ask the user to check it and label access unverified until then.
-If MagicDNS or HTTPS approval is needed, give the user that prerequisite and resume
-after approval; do not enable public Funnel as a workaround.
-
-In the final OpenClaw handoff, include the verified URL as a clickable link and say:
-“Connect to your Tailscale network, open the dashboard, and download/install its
-PWA using your browser's Install app or Add to Home Screen option.” If the browser
-does not offer installation, report that limitation and provide browser access.
-Keep tokens out of shared URLs and reports; gateway authentication still applies.
 
 On a phone, open the Tailscale app, then a browser, and visit the printed
 `https://<box>.<tailnet>.ts.net` URL to log in to the gateway. Gateway token auth
@@ -262,27 +249,6 @@ confirmations are never answered by the manager. `logs` follows until interrupte
 Do not run destructive operations without the user's authorization or bypass their
 confirmation. This helper provides no delete/restart/arbitrary-shell command.
 
-## Troubleshooting
-
-When an install stalls or authentication fails, read
-[known issues](docs/agents/known-issues-and-improvements.md) before debugging; it
-records the causes found in live deployments. Recurring ones:
-
-- Validate the model provider key from the box (SSH in and call the provider API
-  from there), not from a machine whose egress goes through a local proxy; proxied
-  `401` responses look like bad keys.
-- Read `.env` by sourcing it (`set -a && source .env && set +a`). Never
-  `grep`/`cut` values out of it: they are written quoted and the quotes break
-  authentication.
-- The first dashboard login from a new device needs host-side approval: on the
-  box, as the `openclaw` user with the gateway secret env sourced and the CLI's
-  absolute path, run `openclaw devices approve <id>`.
-- After deleting a box, remove its stale device in the Tailscale admin console;
-  otherwise a same-name successor is registered as `<name>-1`.
-
-Unattended installs, legacy Hermes migration, hung remote prompts, and manual
-setup are in [troubleshooting](references/troubleshooting.md).
-
 ## Verification and fallback
 
 Use `bash -n` on changed scripts and `python3 -m unittest discover -s tests -v` in
@@ -291,5 +257,16 @@ ShellCheck is preferred when installed. Live install acceptance requires the
 actual paid-server confirmation, Tailscale approval, completed handoff and remote
 status; offline tests do not establish deployment success.
 
-Hung remote prompts and manual setup are covered in
-[troubleshooting](references/troubleshooting.md).
+If a remote prompt still hangs after the wrapper has fed its spare newline input,
+use TIOCSTI pty injection from a trusted interactive session to inject the needed
+response into the hung session's controlling terminal. Confirm the target session
+before injecting; if TIOCSTI is unavailable, reconnect and rerun the operation.
+
+If the OpenClaw backup fails with `Archive symbolic link target must be relative`,
+Chrome transient symlinks need cleanup — this is handled automatically by the
+generated backup helper (requires the latest version of this script).
+
+If manual setup is necessary, copy the chosen bundled provisioning pair and
+`agent-box-manage.sh` to the project, create `.env` from the example, generate/reuse
+a provisioning key, add ignore rules, and set `.env`/`credentials.txt` to mode 600
+before writing secrets. Follow the same interactive install and register steps.

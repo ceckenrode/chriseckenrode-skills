@@ -13,11 +13,11 @@ unstaged, and untracked files; additions, deletions, and renames; generated file
 and touched tests and documentation. Do not broaden a task-owned review to unrelated
 dirty work.
 
-Honor specified models, effort, reviewer counts, lenses, and format. Resolve
-every included role's model and effort before dispatch; ask when either is
-missing rather than inheriting runtime defaults. Supply the relevant plan
-contract, design rationale, binding examples/interfaces, review scope, and gate
-evidence.
+Honor specified and inherited models, effort, reviewer counts, lenses, and
+format. Use the complete workflow configuration resolved up front; do not reset
+per-stage overrides or a delegated planning owner to runtime defaults. Supply
+the relevant plan contract, design rationale, binding examples/interfaces, review
+scope, and gate evidence.
 
 Use correctness, tests, simplicity, and project-rules as coverage lenses. They are
 review questions, not mandatory reviewer slots; assign only the requested reviewer
@@ -25,8 +25,10 @@ count and keep independent lenses disjoint where practical.
 
 For plan review, inspect assumptions and design, task dependencies, readiness
 for implementation, and verification gates. Plan fixes update the plan and its
-handoff; they do not edit product code. Follow the selected plan-reviewer and
-plan-fixer settings, which may differ from code-review settings.
+handoff; they do not edit product code. Findings that require an architectural
+plan correction route to the selected planning owner/worker, while the lead
+steers scope and accepts the corrected plan. Follow the selected plan-reviewer
+and plan-fixer settings, which may differ from code-review settings.
 
 Reviewer count, model selection, reasoning effort, and round count are independent
 controls. Multiple reviewers may use the same model or different models and effort
