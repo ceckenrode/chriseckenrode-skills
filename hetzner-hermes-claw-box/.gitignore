@@ -1,0 +1,28 @@
+.DS_Store
+
+# Local secrets and generated credentials.
+.env
+.env.*
+!.env.example
+credentials.txt
+credentials*.txt
+
+# Local runtime output.
+logs/
+tmp/
+.vps-sim/
+
+# Editor and tool noise.
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local box inventory and atomic-write/lock files.
+boxes.json
+boxes.json.*
+
+# Python verification artifacts.
+__pycache__/
+/boxes.json
+/boxes.json.*

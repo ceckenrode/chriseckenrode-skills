@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "boxes": [
+    {
+      "name": "example-hermes",
+      "runtime": "hermes",
+      "server_id": "123456",
+      "server_type": "cx23",
+      "location": "fsn1",
+      "public_ip": "192.0.2.1",
+      "tailscale_ip": "100.64.0.1",
+      "ssh_key_path": "/absolute/path/to/agentbox_hetzner_ed25519",
+      "groups": [
+        "default"
+      ],
+      "agents": [],
+      "paths": {
+        "vps_script": "/root/hermes-vps.sh",
+        "state_dir": "/var/lib/hermes-vps"
+      },
+      "created_at": "2000-01-01T00:00:00Z"
+    },
+    {
+      "name": "example-openclaw",
+      "runtime": "openclaw",
+      "server_id": "234567",
+      "server_type": "cx23",
+      "location": "fsn1",
+      "public_ip": "192.0.2.1",
+      "tailscale_ip": "100.64.0.2",
+      "ssh_key_path": "/absolute/path/to/agentbox_hetzner_ed25519",
+      "groups": [
+        "main"
+      ],
+      "agents": [
+        {
+          "id": "main",
+          "group": "main"
+        }
+      ],
+      "paths": {
+        "vps_script": "/root/openclaw-vps.sh",
+        "state_dir": "/var/lib/openclaw-vps"
+      },
+      "created_at": "2000-01-01T00:00:00Z"
+    }
+  ]
+}

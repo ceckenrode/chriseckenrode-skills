@@ -1,0 +1,32 @@
+# macOS metadata
+.DS_Store
+._*
+
+# Local credentials (keep shareable examples)
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Dependencies and Python caches
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local scratch output
+*.log
+*.swp
+*.swo
+*~
+/tmp/
+/temp/
+
+# Provisioning credentials, live inventory, and tool caches
+credentials*.txt*
+boxes.json
+boxes.json.*
+.ruff_cache/
+.pytest_cache/
+.vps-sim/
