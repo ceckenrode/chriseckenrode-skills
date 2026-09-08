@@ -9,7 +9,7 @@ the caller did not select another GLM model.
 ```bash
 model_id="zai-coding-plan/glm-5.3"
 opencode run "Follow the attached follow-up brief." --dir "$project_path" \
-  --session "$session_id" --model "$model_id" --format json --auto \
+  --session "$session_id" --model "$model_id" --variant max --format json --auto \
   --file "$followup_path" > "$events_path"
 ```
 

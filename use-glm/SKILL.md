@@ -7,8 +7,14 @@ description: Dispatch GLM workers through OpenCode when a GLM model is requested
 
 Run one bounded GLM assignment through OpenCode CLI. The caller owns workflow,
 model selection, and acceptance; this skill owns the process and session. Default
-to `zai-coding-plan/glm-5.3` unless the caller selects another GLM model. This
-skill does not dispatch non-GLM models through OpenCode.
+to `zai-coding-plan/glm-5.3` with `--variant max` unless the caller selects
+another GLM model or reasoning effort. This skill does not dispatch non-GLM
+models through OpenCode.
+
+**Prerequisites:** OpenCode CLI must be installed and authenticated for the
+`zai-coding-plan` provider (Z.AI coding plan API key). Run `opencode auth login`
+to configure the key if `opencode auth list` shows no credentials. Installing
+this skill does not install or authenticate OpenCode.
 
 When the `spawn-glm` skill is installed and the caller explicitly requests its
 low-level wrapper, load it for the wrapper recipe while preserving this skill's
@@ -32,11 +38,12 @@ GLM-only routing and the caller's model choice.
    ```bash
    model_id="zai-coding-plan/glm-5.3"
    opencode run "Follow the attached worker brief." --dir "$project_path" \
-     --model "$model_id" --format json --auto --file "$brief_path" > "$events_path"
+     --model "$model_id" --variant max --format json --auto \
+     --file "$brief_path" > "$events_path"
    ```
 
-   Add `--variant "$effort"` only for a selected, supported GLM variant; variants
-   are provider-specific. `--auto` approves permissions not explicitly denied and
+   `--variant max` is the default; replace it with the caller's selected supported
+   GLM variant when different. `--auto` approves permissions not explicitly denied and
    retains configured denials. Use it only where supported and allowed by the
    host. For restricted execution, omit it and preserve the caller's permission
    settings. A permission failure is a blocker, not permission to weaken rules.
