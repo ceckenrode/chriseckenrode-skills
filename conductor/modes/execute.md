@@ -4,10 +4,8 @@
    from the requested scope, behavior, constraints, and acceptance criteria; no
    plan file or incoming handoff is required. For a supplied chat/file plan,
    check design, dependencies, ownership, acceptance criteria, and gates before
-   coding; resolve missing prerequisites before dependents start. In either
-   entry, use the complete configuration resolved at workflow setup, including
-   inherited settings from the supplied handoff when present; do not reset a
-   delegated planner or per-stage override to the lead default.
+   coding; resolve missing prerequisites before dependents start. Use the settled
+   [workflow configuration](../references/workflow.md).
 2. Dispatch ready work concurrently using the scheduler below. Give each worker
    the accepted brief or relevant plan section, binding interfaces and behavior,
    exact gates, and expected evidence. Workers return `NEEDS_DECISION` for
@@ -22,7 +20,7 @@
    require same-task observed red → implementation → green evidence where
    applicable. Each task or slice must leave a working state before its
    dependents release.
-4. Apply the dispatch reference's active-supervision guidance throughout implementation. Compare checkpoint evidence with the planned design and quality bar, resolve blocked work and conflicts, and give workers precise corrective instructions before errors spread to dependent tasks.
+4. Apply [supervision](../references/agent-dispatch.md#supervision) throughout implementation. Compare checkpoint evidence with the planned design and quality bar, resolve blocked work and conflicts, and give workers precise corrective instructions before errors spread to dependent tasks.
 5. Have the explicit integration owner combine completed work, check scope, and
    verify affected behavior with documented project checks. The explicit
    shared-contract owner resolves contract questions before consumers proceed.
@@ -42,13 +40,6 @@ and integration ownership are explicit before dispatch.
 Fill available worker slots with independent ready tasks, respecting user-requested concurrency. When a task's gate passes, immediately release eligible dependents and dispatch more ready work; avoid waiting for an entire wave when only one prerequisite matters. Sequence genuinely coupled work and serialize or isolate shared build/test resources.
 
 If a prerequisite fails or changes its contract, block its affected dependents, reassess any work based on the old contract, and keep unrelated tasks moving. Record graph changes and their reasons. Distinguish a runtime worker limit from a task dependency rather than inventing blockers to justify serial execution.
-
-## Interruption and redirection
-
-When the user stops or redirects the run, stop workers affected by the change,
-capture their partial changes and evidence, and mark verification based on the
-old scope or contract stale. Reconcile the new brief before restarting affected
-work; preserve unrelated worker progress and unrelated dirty paths.
 
 ## Verification gates
 

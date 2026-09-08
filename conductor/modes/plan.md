@@ -1,12 +1,6 @@
 # Planning
 
-When neither the new request nor the inherited configuration selects a planning
-model or worker, the lead/orchestrator plans with its current model and reasoning
-effort. Do not ask the user to configure that default. An explicitly named model
-is honored even when it matches the current model, and an explicit effort is
-preserved. When a planning worker is selected, that worker owns architectural
-decisions and synthesis within the accepted scope; the lead
-steers scope and accepts or corrects the resulting plan.
+Use the planning owner settled in [workflow setup](../references/workflow.md).
 
 ## Plan detail
 
@@ -21,7 +15,8 @@ below where it helps implementation correctness.
 Plan for an implementer with less capability and context than the orchestrator. Make design decisions explicit enough that correct execution depends on following the plan, not reconstructing your reasoning. Use the user's format or project conventions; scale detail to uncertainty and risk rather than adding boilerplate.
 
 1. Identify intended behavior, constraints, existing decisions, and acceptance criteria.
-2. For an authorized planning or exploration run, apply the bounded internal-exploration guidance in [exploration](../references/exploration.md): automatically select focused, read-only small-model workers to navigate and absorb raw context, then return distilled, anchored findings and material risks. A selected planning worker may use those findings to make architectural decisions; follow up only on unknowns that affect the plan. Help and bare usage remain non-dispatching.
+2. Gather evidence using [internal exploration](../references/exploration.md).
+   Close unknowns that affect design before synthesizing the plan.
 3. Synthesize findings into a direction. The planning owner weighs proposed approaches, makes creative and architectural decisions, and distinguishes current behavior from intended behavior. The lead steers scope and accepts the result. Resolve contradictions through targeted worker questions or a user decision; record assumptions and rationale.
 4. For detailed plans, decompose the work into a dependency graph and
    implementation-ready tasks using the contracts below. For lite plans, use an
