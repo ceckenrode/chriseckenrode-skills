@@ -9,8 +9,11 @@ detail from complexity, risk, and dependencies, and record that choice. A lite
 plan remains actionable: state the outcome, scope and exclusions, ordered steps,
 material dependencies, and verification checks with pass criteria. It may omit a
 full dependency graph, exhaustive signatures, and tracer-bullet slices when those
-would add no value for a small, low-risk task. A detailed plan keeps the rigor
-below where it helps implementation correctness.
+would add no value for a small, low-risk task. For detailed plans, use
+[ce-plan](../../ce-plan/SKILL.md) when the user requests a detailed written plan,
+or when detailed mode is selected here. Follow its plan format and default save
+location; keep workflow settings and handoffs outside the plan artifact. Retain
+the rigor below where it helps implementation correctness.
 
 Plan for an implementer with less capability and context than the main agent. Make design decisions explicit enough that correct execution depends on following the plan, not reconstructing your reasoning. Use the user's format or project conventions; scale detail to uncertainty and risk rather than adding boilerplate.
 
