@@ -9,6 +9,7 @@ BACKUP_DIR="${STATE_DIR}/backups"
 GROUPS_FILE="${STATE_DIR}/groups.json"
 AGENTS_FILE="${STATE_DIR}/agents.json"
 NODE_MAJOR="24"
+GH_INSTALL_PATH="/usr/local/bin/gh"
 MODEL_PROVIDER="${MODEL_PROVIDER:-}"
 MODEL_BASE_URL="${MODEL_BASE_URL:-}"
 MODEL_API_KEY="${MODEL_API_KEY:-}"
@@ -19,7 +20,8 @@ OPENCLAW_PORT="18789"
 TAILSCALE_IFACE="tailscale0"
 OPENCLAW_TIMEZONE="${OPENCLAW_TIMEZONE:-}"
 DEFAULT_GROUP_ID="main"
-DEFAULT_AGENT_ID="main"
+DEFAULT_AGENT_ID="${OPENCLAW_INITIAL_AGENT_ID:-main}"
+OPENCLAW_INITIAL_AGENT_LABEL="${OPENCLAW_INITIAL_AGENT_LABEL:-}"
 INCUS_SSH_BASE_PORT="2222"
 INCUS_REMOTE_WORKSPACE_ROOT="/workspace/openclaw-sandboxes"
 
@@ -31,10 +33,18 @@ OPENCODE_CONFIG_DIR="${APP_HOME}/.config/opencode"
 OPENCODE_CONFIG_FILE="${OPENCODE_CONFIG_DIR}/opencode.json"
 USER_BIN_DIR="${APP_HOME}/.local/bin"
 USER_SYSTEMD_DIR="${APP_HOME}/.config/systemd/user"
-OPENCLAW_WORKSPACE="${APP_HOME}/workspace"
 OPENCLAW_SERVICE="openclaw-gateway.service"
 SANDBOX_SSH_KEY="${APP_HOME}/.ssh/openclaw-sandbox_ed25519"
 SANDBOX_KNOWN_HOSTS_DIR="${APP_HOME}/.ssh/openclaw-sandbox-known-hosts"
+GITHUB_SSH_DIR="${APP_HOME}/.ssh"
+GITHUB_SSH_KEY="${GITHUB_SSH_DIR}/github_ed25519"
+GITHUB_SSH_PUBLIC_KEY="${GITHUB_SSH_KEY}.pub"
+GITHUB_SSH_CONFIG="${GITHUB_SSH_DIR}/config"
+GITHUB_KNOWN_HOSTS="${GITHUB_SSH_DIR}/known_hosts"
+GITHUB_SSH_MARKER="# openclaw-vps github-bootstrap"
+GITHUB_SSH_END_MARKER="# end openclaw-vps github-bootstrap"
+GITHUB_TRUSTED_ED25519_FINGERPRINT="SHA256:+DiY3wvvV6TuJJhbpZisF/o8t4U7AqW5"
+GITHUB_TRUSTED_RSA_FINGERPRINT="SHA256:nThbg6kXUpJWGlmIJbZL"
 HOST_ACTION_SCRIPT="/usr/local/sbin/openclaw-vps-host-action"
 SERVE_ENABLED_FILE="${STATE_DIR}/serve.enabled"
 TAILSCALE_SERVE_TARGET="http://127.0.0.1:${OPENCLAW_PORT}"
@@ -51,10 +61,11 @@ Usage: ./openclaw-vps.sh <command> [options]
 Commands:
   install                 Harden the VPS, install Tailscale, Node, Incus, OpenClaw, and OpenCode.
   add-group GROUP         Create a new Incus isolation group for OpenClaw agents.
-  add-agent AGENT --group GROUP
+  add-agent AGENT --group GROUP [--sandbox JSON]
                           Create a new OpenClaw agent bound to a Telegram bot and isolation group.
   list                    List managed isolation groups and agents.
   refresh-config          Regenerate OpenClaw/OpenCode config from managed state and restart OpenClaw.
+  github-bootstrap        Interactively configure shared-account GitHub access (no token arguments).
   serve                   Expose the loopback dashboard over tailnet-only Tailscale HTTPS.
   serve-off               Disable the Tailscale dashboard exposure.
   lockdown                Enforce Tailscale-only inbound access with UFW.
@@ -84,6 +95,7 @@ Environment overrides:
                           Optional Telegram bot token for add-agent.
   OPENCLAW_AGENT_TELEGRAM_ALLOW_FROM
                           Optional numeric Telegram user ID allowlist for add-agent.
+  OPENCLAW_AGENT_SANDBOX  Explicit JSON sandbox policy for add-agent; otherwise inherit an unambiguous existing policy.
   OPENCLAW_AGENT_SKILLS   Optional comma-separated skill allowlist for every managed agent.
                           Leave unset to let OpenClaw expose all eligible skills.
   OPENCLAW_TIMEZONE       IANA timezone for host, sandbox, and OpenClaw prompts. Default: existing managed env, host timezone, then UTC.
@@ -94,7 +106,7 @@ Final intended firewall posture:
   - All inbound traffic allowed on tailscale0.
   - No public SSH unless --keep-public-ssh is explicitly used.
   - OpenClaw gateway binds to loopback only.
-  - OpenClaw tool execution uses the required Incus container sandbox over loopback SSH.
+  - New installations use persistent host workspaces with sandbox off; existing agents retain their policy.
 USAGE
 }
 
@@ -182,6 +194,20 @@ validate_managed_id() {
   [[ "$id" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || fail "invalid id '${id}'; use lowercase letters, numbers, and hyphens, starting with a letter"
 }
 
+require_initial_agent_identity() {
+  [[ -n "${OPENCLAW_INITIAL_AGENT_ID:-}" ]] || \
+    fail 'OPENCLAW_INITIAL_AGENT_ID is required for a fresh OpenClaw install'
+  validate_managed_id "$OPENCLAW_INITIAL_AGENT_ID"
+  DEFAULT_AGENT_ID="$OPENCLAW_INITIAL_AGENT_ID"
+  OPENCLAW_INITIAL_AGENT_LABEL="${OPENCLAW_INITIAL_AGENT_LABEL:-$OPENCLAW_INITIAL_AGENT_ID}"
+  OPENCLAW_WORKSPACE="$(new_agent_workspace "$DEFAULT_AGENT_ID")"
+}
+
+refuse_existing_managed_state() {
+  [[ ! -e "$STATE_DIR" ]] || \
+    fail "existing managed OpenClaw state detected at $STATE_DIR; inspect it and use management commands instead of install"
+}
+
 ensure_state_files() {
   install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$STATE_DIR" "$BACKUP_DIR"
   if [[ ! -f "$GROUPS_FILE" ]]; then
@@ -210,9 +236,153 @@ group_known_hosts_file() {
   printf '%s/%s_known_hosts' "$SANDBOX_KNOWN_HOSTS_DIR" "$group_id"
 }
 
+new_agent_workspace() {
+  validate_managed_id "$1"
+  printf '%s/workspace-%s' "$APP_HOME" "$1"
+}
+
+# Read-only preflight. Output is a projection, never a rewrite of legacy state.
+# Python's realpath also resolves symlinks in parents of paths not yet created.
+resolve_agent_state() {
+  python3 - "$AGENTS_FILE" "$OPENCLAW_CONFIG_FILE" "$APP_HOME" "${1:-}" "${OPENCLAW_AGENT_SANDBOX:-}" <<'PY'
+import copy
+import json
+import os
+import re
+import sys
+
+state_file, config_file, home, new_id, explicit = sys.argv[1:]
+
+def reject(message):
+    raise ValueError(message)
+
+def merge(base, override):
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        result[key] = merge(result[key], value) if isinstance(result.get(key), dict) and isinstance(value, dict) else copy.deepcopy(value)
+    return result
+
+def policy(value, agent, partial=False):
+    prefix = 'invalid sandbox policy for agent ' + agent + ': '
+    if not isinstance(value, dict):
+        reject(prefix + 'must be object')
+    if (not partial or 'mode' in value) and value.get('mode') not in ('off', 'all', 'non-main'):
+        reject(prefix + 'unresolved or unknown mode; select an explicit sandbox policy')
+    if 'backend' in value and value['backend'] not in ('ssh', 'docker'):
+        reject(prefix + 'unknown backend')
+    for field in ('ssh', 'docker', 'browser', 'containers'):
+        if field in value and not isinstance(value[field], dict):
+            reject(prefix + field + ' must be object')
+    for field, allowed in (('scope', ('session', 'agent', 'shared')), ('workspaceAccess', ('none', 'ro', 'rw'))):
+        if field in value and value[field] not in allowed:
+            reject(prefix + 'unknown ' + field)
+    if 'enabled' in value.get('browser', {}) and not isinstance(value['browser']['enabled'], bool):
+        reject(prefix + 'browser.enabled must be boolean')
+    for field in ('target', 'identityFile', 'knownHostsFile', 'workspaceRoot'):
+        if field in value.get('ssh', {}) and (not isinstance(value['ssh'][field], str) or not value['ssh'][field]):
+            reject(prefix + 'ssh.' + field + ' must be nonempty string')
+    for field in ('strictHostKeyChecking', 'updateHostKeys'):
+        if field in value.get('ssh', {}) and not isinstance(value['ssh'][field], bool):
+            reject(prefix + 'ssh.' + field + ' must be boolean')
+    if not partial and value.get('mode') != 'off' and value.get('backend') == 'ssh' and not value.get('ssh', {}).get('target'):
+        reject(prefix + 'SSH target is unresolved')
+    return value
+
+def workspace(agent, seen):
+    name, path = agent['id'], agent.get('workspace')
+    if not isinstance(path, str) or not os.path.isabs(path) or any(ord(c) < 32 for c in path) or os.path.realpath(path) == '/':
+        reject('invalid workspace for agent ' + name + ': expected absolute non-root path')
+    canonical = os.path.realpath(path)
+    if os.path.exists(path) and not os.path.isdir(path):
+        reject('invalid workspace for agent ' + name + ': not a directory')
+    if canonical in seen:
+        reject('duplicate workspace for agents ' + seen[canonical] + ' and ' + name + ': ' + path)
+    seen[canonical] = name
+    candidates = [os.path.join(home, 'workspace-' + name), os.path.join(home, '.openclaw', 'workspace-' + name), os.path.join(home, 'workspace'), os.path.join(home, '.openclaw', 'workspace')]
+    for candidate in candidates:
+        if os.path.lexists(candidate) and os.path.realpath(candidate) != canonical:
+            reject('duplicate workspace for agent ' + name + ': recorded ' + path + '; conflicting ' + candidate + ' (preserved; reconcile explicitly)')
+
+try:
+    with open(state_file) as stream:
+        state = json.load(stream)
+    if not isinstance(state, dict) or not isinstance(state.get('agents'), list):
+        reject('invalid agents.json: agents must be array')
+    try:
+        with open(config_file) as stream:
+            current = json.load(stream)
+        if not isinstance(current, dict):
+            current = {}
+    except (OSError, ValueError):
+        current = {}
+    config_agents = current.get('agents', {})
+    seen, ids = {}, set()
+    for agent in state['agents']:
+        name = agent.get('id') if isinstance(agent, dict) else None
+        if not isinstance(name, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}', name) or name in ids:
+            reject('invalid or duplicate managed agent id')
+        ids.add(name)
+        workspace(agent, seen)
+        for field, kind, label in (('subagents', dict, 'object'), ('skills', list, 'array'), ('contextInjection', str, 'string'), ('bootstrapMaxChars', (int, float), 'number'), ('bootstrapTotalMaxChars', (int, float), 'number'), ('tools', dict, 'object'), ('heartbeat', dict, 'object')):
+            if field in agent and (not isinstance(agent[field], kind) or (label == 'number' and isinstance(agent[field], bool))):
+                reject('invalid agents.json: agent "' + name + '" field "' + field + '" must be ' + label)
+            if field == 'skills' and any(not isinstance(v, str) for v in agent.get(field, [])):
+                reject('invalid agents.json: agent "' + name + '" field "skills" must be array of strings')
+        if 'sandbox' in agent:
+            agent['sandbox'] = policy(agent['sandbox'], name)
+            continue
+        if not isinstance(config_agents, dict):
+            reject('unresolved sandbox policy for agent ' + name)
+        matches = []
+        for shape in ('list', 'entries'):
+            entries = config_agents.get(shape, [])
+            if isinstance(entries, dict):
+                entries = [dict(value, id=key) for key, value in entries.items() if isinstance(value, dict)]
+            if not isinstance(entries, list):
+                reject('invalid sandbox current-config agent shape')
+            matches.extend(entry for entry in entries if isinstance(entry, dict) and entry.get('id') == name)
+        if not matches:
+            reject('unresolved sandbox policy for agent ' + name + '; matching current config required')
+        defaults = config_agents.get('defaults', {})
+        base = defaults.get('sandbox', {}) if isinstance(defaults, dict) else None
+        effective = []
+        for entry in matches:
+            inherited = policy(base, name, partial=True)
+            override = policy(entry.get('sandbox', {}), name, partial=True)
+            effective.append(policy(merge(inherited, override), name))
+        if any(p != effective[0] for p in effective):
+            reject('conflicting sandbox policies for agent ' + name)
+        agent['sandbox'] = effective[0]
+    if new_id:
+        if not re.fullmatch(r'[a-z][a-z0-9-]{0,31}', new_id) or new_id in ids:
+            reject('invalid or existing new agent id: ' + new_id)
+        workspace({'id': new_id, 'workspace': os.path.join(home, 'workspace-' + new_id)}, seen)
+        if explicit:
+            chosen = policy(json.loads(explicit), new_id)
+        elif not state['agents']:
+            if os.path.exists(config_file):
+                defaults = config_agents.get('defaults', {}) if isinstance(config_agents, dict) else {}
+                chosen = policy(defaults.get('sandbox'), new_id)
+            else:
+                chosen = {'mode': 'off'}
+        else:
+            choices = [agent['sandbox'] for agent in state['agents']]
+            if any(p != choices[0] for p in choices):
+                reject('mixed existing policies; select an explicit sandbox policy with --sandbox JSON or OPENCLAW_AGENT_SANDBOX')
+            chosen = choices[0]
+        print(json.dumps(chosen))
+    else:
+        print(json.dumps(state))
+except (OSError, ValueError, TypeError, KeyError) as error:
+    print('[openclaw-vps] error: ' + str(error), file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
 agent_workspace() {
-  local agent_id="$1"
-  printf '%s/workspace-%s' "$APP_HOME" "$agent_id"
+  local resolved
+  resolved="$(resolve_agent_state)" || return 1
+  jq -er --arg id "$1" '.agents[] | select(.id == $id) | .workspace' <<<"$resolved"
 }
 
 agent_dir() {
@@ -235,7 +405,7 @@ managed_skill_source_dirs() {
 sync_agent_workspace_skills() {
   local agent_id="$1"
   local workspace skills_source skill_path skill_name target marker
-  workspace="$(agent_workspace "$agent_id")"
+  workspace="$(agent_workspace "$agent_id")" || return 1
   install -d -o "$APP_USER" -g "$APP_USER" -m 0755 "$workspace/skills"
   while IFS= read -r skills_source; do
     [[ -d "$skills_source" ]] || continue
@@ -262,7 +432,7 @@ sync_agent_workspace_skills() {
 prune_missing_managed_workspace_skills() {
   local agent_id="$1"
   local workspace managed_skill skill_name found skills_source
-  workspace="$(agent_workspace "$agent_id")"
+  workspace="$(agent_workspace "$agent_id")" || return 1
   [[ -d "$workspace/skills" ]] || return 0
   for managed_skill in "$workspace/skills"/*; do
     [[ -d "$managed_skill" && -f "$managed_skill/.openclaw-vps-managed-skill" ]] || continue
@@ -281,7 +451,7 @@ prune_missing_managed_workspace_skills() {
 }
 
 sync_all_agent_workspace_skills() {
-  ensure_state_files
+  resolve_agent_state >/dev/null || return 1
   while IFS= read -r agent_id; do
     [[ -n "$agent_id" ]] || continue
     sync_agent_workspace_skills "$agent_id"
@@ -382,9 +552,11 @@ write_agent_record() {
   local group_id="$2"
   local token_env="$3"
   local telegram_allow_from="$4"
-  ensure_state_files
-  local tmp workspace agent_state allow_value owner_value
-  workspace="$(agent_workspace "$agent_id")"
+  local agent_label="${5:-$agent_id}"
+  local is_default="${6:-false}"
+  local tmp workspace agent_state allow_value owner_value sandbox_policy
+  sandbox_policy="$(resolve_agent_state "$agent_id")" || return 1
+  workspace="$(new_agent_workspace "$agent_id")"
   agent_state="$(agent_dir "$agent_id")"
   allow_value="$(normalize_telegram_allow_from "$telegram_allow_from")"
   owner_value="$(telegram_owner_allow_from "$telegram_allow_from")"
@@ -398,7 +570,10 @@ write_agent_record() {
     --arg telegramTokenEnv "$token_env" \
     --arg allowFrom "$allow_value" \
     --arg ownerAllowFrom "$owner_value" \
-    'del(.agents[]? | select(.id == $id)) | .agents += [{id:$id, group:$group, workspace:$workspace, agentDir:$agentDir, telegramAccount:$telegramAccount, telegramTokenEnv:$telegramTokenEnv, telegramAllowFrom:$allowFrom, ownerAllowFrom:$ownerAllowFrom}] | .agents |= sort_by(.id)' \
+    --arg label "$agent_label" \
+    --argjson isDefault "$is_default" \
+    --argjson sandbox "$sandbox_policy" \
+    'del(.agents[]? | select(.id == $id)) | .agents += [{id:$id, group:$group, workspace:$workspace, agentDir:$agentDir, default:$isDefault, label:$label, sandbox:$sandbox, telegramAccount:$telegramAccount, telegramTokenEnv:$telegramTokenEnv, telegramAllowFrom:$allowFrom, ownerAllowFrom:$ownerAllowFrom}] | .agents |= sort_by(.id)' \
     "$AGENTS_FILE" >"$tmp"
   mv "$tmp" "$AGENTS_FILE"
   chown "$APP_USER:$APP_USER" "$AGENTS_FILE"
@@ -546,7 +721,7 @@ ensure_app_user() {
   install -d -o "$APP_USER" -g "$APP_USER" -m 0700 "$APP_HOME"
   install -d -o "$APP_USER" -g "$APP_USER" -m 0700 "$USER_CONFIG_DIR" "$OPENCLAW_CONFIG_DIR" "$OPENCODE_CONFIG_DIR" "$USER_SYSTEMD_DIR"
   install -d -o "$APP_USER" -g "$APP_USER" -m 0755 "${APP_HOME}/.local"
-  install -d -o "$APP_USER" -g "$APP_USER" -m 0755 "$USER_BIN_DIR" "$OPENCLAW_WORKSPACE" "$SANDBOX_KNOWN_HOSTS_DIR"
+  install -d -o "$APP_USER" -g "$APP_USER" -m 0755 "$USER_BIN_DIR" "$SANDBOX_KNOWN_HOSTS_DIR"
   install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$STATE_DIR" "$BACKUP_DIR"
   ensure_state_files
   install -d -m 0755 "$LOG_DIR"
@@ -804,8 +979,11 @@ ensure_agent() {
   local group_id="$2"
   local telegram_token="$3"
   local telegram_allow_from="$4"
+  local agent_label="${5:-$agent_id}"
+  local is_default="${6:-false}"
   validate_managed_id "$agent_id"
   validate_managed_id "$group_id"
+  resolve_agent_state "$agent_id" >/dev/null || return 1
   group_exists "$group_id" || fail "isolation group not found: ${group_id}"
   if agent_exists "$agent_id"; then
     fail "agent already exists: ${agent_id}"
@@ -815,7 +993,7 @@ ensure_agent() {
     token_env="$(agent_env_var "$agent_id")"
     set_user_env_value "$token_env" "$telegram_token"
   fi
-  write_agent_record "$agent_id" "$group_id" "$token_env" "$telegram_allow_from"
+  write_agent_record "$agent_id" "$group_id" "$token_env" "$telegram_allow_from" "$agent_label" "$is_default"
   sync_agent_workspace_skills "$agent_id"
   log "created agent ${agent_id} in isolation group ${group_id}"
 }
@@ -825,9 +1003,757 @@ run_as_app_user() {
   sudo -Hiu "$APP_USER" bash -lc "export PATH='${USER_BIN_DIR}:/usr/local/bin:/usr/bin:/bin'; ${command_text}"
 }
 
+# Use this only for commands whose arguments may contain operator-controlled
+# values. In particular, git config values must never become shell source text.
+run_as_app_user_literal() {
+  local executable="$1"
+  shift
+  sudo -Hiu "$APP_USER" -- "$executable" "$@"
+}
+
+ensure_git_identity() {
+  local value
+
+  if ! value="$(run_as_app_user_literal git config --global --get user.name 2>/dev/null)" || [[ -z "$value" ]]; then
+    IFS= read -r -p 'Git user.name: ' value || fail 'could not read git user.name'
+    [[ -n "$value" ]] || fail 'git user.name cannot be empty'
+    run_as_app_user_literal git config --global user.name "$value" || fail 'could not set git user.name'
+  fi
+
+  if ! value="$(run_as_app_user_literal git config --global --get user.email 2>/dev/null)" || [[ -z "$value" ]]; then
+    IFS= read -r -p 'Git user.email: ' value || fail 'could not read git user.email'
+    [[ -n "$value" ]] || fail 'git user.email cannot be empty'
+    run_as_app_user_literal git config --global user.email "$value" || fail 'could not set git user.email'
+  fi
+
+  if ! value="$(run_as_app_user_literal git config --global --get init.defaultBranch 2>/dev/null)" || [[ -z "$value" ]]; then
+    IFS= read -r -p 'Git default branch [main]: ' value || fail 'could not read git default branch'
+    value="${value:-main}"
+    run_as_app_user_literal git config --global init.defaultBranch "$value" || fail 'could not set git default branch'
+  fi
+}
+
+refuse_symlink_path() {
+  python3 - "$1" <<'PY'
+import os
+import stat
+import sys
+
+path = os.path.abspath(sys.argv[1])
+current = os.sep
+for component in path.split(os.sep)[1:]:
+    current = os.path.join(current, component)
+    try:
+        mode = os.lstat(current).st_mode
+    except FileNotFoundError:
+        break
+    if stat.S_ISLNK(mode):
+        raise SystemExit('refusing symlink output path: ' + current)
+PY
+}
+
+check_or_write_github_ssh_config() {
+  local mode="${1:-check}"
+  python3 - "$GITHUB_SSH_CONFIG" "$GITHUB_SSH_KEY" "$GITHUB_SSH_MARKER" "$GITHUB_SSH_END_MARKER" "$mode" <<'PY'
+import fnmatch
+import os
+import pathlib
+import re
+import shlex
+import stat
+import sys
+import tempfile
+
+path = pathlib.Path(sys.argv[1])
+key = sys.argv[2]
+marker = sys.argv[3]
+end_marker = sys.argv[4]
+mode = sys.argv[5]
+original = path.read_text() if path.exists() else ''
+lines = original.splitlines(keepends=True)
+
+def check_block(hosts, identities):
+    if not hosts:
+        return
+    positive = [item for item in hosts if not item.startswith('!')]
+    negative = [item[1:] for item in hosts if item.startswith('!')]
+    applies = any(fnmatch.fnmatch('github.com', item) for item in positive)
+    applies = applies and not any(fnmatch.fnmatch('github.com', item) for item in negative)
+    if applies:
+        for identity in identities:
+            if identity != key:
+                raise SystemExit(
+                    'conflicting github.com IdentityFile in ' + str(path) +
+                    ': ' + identity + '; remove or reconcile it before GitHub bootstrap'
+                )
+
+in_own_block = False
+hosts = []
+identities = []
+global_identities = []
+seen_host = False
+for line in lines:
+    stripped = line.rstrip('\r\n')
+    if stripped == marker:
+        if not seen_host:
+            check_block(['github.com'], global_identities)
+        check_block(hosts, identities)
+        hosts = []
+        identities = []
+        in_own_block = True
+        continue
+    if in_own_block:
+        if stripped == end_marker:
+            in_own_block = False
+        continue
+    host_match = re.match(r'^\s*Host\s+(.+?)\s*$', stripped, re.IGNORECASE)
+    if host_match:
+        check_block(hosts, identities)
+        seen_host = True
+        hosts = host_match.group(1).split()
+        identities = list(global_identities)
+        continue
+    if re.match(r'^\s*Match\s+', stripped, re.IGNORECASE):
+        check_block(hosts, identities)
+        hosts = []
+        identities = []
+        continue
+    if hosts:
+        identity_match = re.match(r'^\s*IdentityFile\s+(.+?)\s*$', stripped, re.IGNORECASE)
+        if identity_match:
+            try:
+                values = shlex.split(identity_match.group(1))
+            except ValueError:
+                values = [identity_match.group(1)]
+            if values and not seen_host:
+                global_identities.append(values[0])
+            elif values:
+                identities.append(values[0])
+check_block(hosts, identities)
+if not seen_host:
+    check_block(['github.com'], global_identities)
+
+if mode == 'check':
+    raise SystemExit(0)
+
+block = (
+    marker + '\n'
+    'Host github.com\n'
+    '  HostName github.com\n'
+    '  User git\n'
+    '  IdentityFile ' + key + '\n'
+    '  IdentitiesOnly yes\n'
+    + end_marker + '\n'
+)
+rewritten = []
+replaced = False
+in_own_block = False
+for line in lines:
+    stripped = line.rstrip('\r\n')
+    if stripped == marker:
+        if not replaced:
+            rewritten.append(block)
+            replaced = True
+        in_own_block = True
+        continue
+    if in_own_block:
+        if stripped == end_marker:
+            in_own_block = False
+        continue
+    rewritten.append(line)
+if not replaced:
+    if rewritten and not rewritten[-1].endswith('\n'):
+        rewritten[-1] += '\n'
+    rewritten.append(block)
+new_content = ''.join(rewritten)
+if new_content != original:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix='.github-config.', dir=str(path.parent), text=True)
+    try:
+        os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(new_content)
+        os.replace(temporary, str(path))
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+PY
+}
+
+verify_github_host_keys() {
+  local scan_file fingerprint_file
+  scan_file="$(mktemp "$GITHUB_SSH_DIR/.github-keyscan.XXXXXX")" || return 1
+  fingerprint_file="$(mktemp "$GITHUB_SSH_DIR/.github-fingerprints.XXXXXX")" || {
+    rm -f "$scan_file"
+    return 1
+  }
+  chmod 0600 "$scan_file" "$fingerprint_file"
+  if ! run_as_app_user_literal ssh-keyscan -T 10 -t ed25519,rsa github.com >"$scan_file"; then
+    rm -f "$scan_file" "$fingerprint_file"
+    fail 'could not scan GitHub host keys; no known_hosts entry was written'
+  fi
+  if ! run_as_app_user_literal ssh-keygen -lf "$scan_file" -E sha256 >"$fingerprint_file"; then
+    rm -f "$scan_file" "$fingerprint_file"
+    fail 'could not fingerprint scanned GitHub host keys; no known_hosts entry was written'
+  fi
+  if ! python3 - "$fingerprint_file" "$GITHUB_TRUSTED_ED25519_FINGERPRINT" "$GITHUB_TRUSTED_RSA_FINGERPRINT" <<'PY'
+import pathlib
+import sys
+
+fingerprints = pathlib.Path(sys.argv[1]).read_text().splitlines()
+trusted = {'ED25519': sys.argv[2], 'RSA': sys.argv[3]}
+seen = {'ED25519': [], 'RSA': []}
+for line in fingerprints:
+    fields = line.split()
+    if len(fields) < 2:
+        continue
+    kind = None
+    if '(ED25519)' in fields:
+        kind = 'ED25519'
+    elif '(RSA)' in fields:
+        kind = 'RSA'
+    if kind is not None:
+        seen[kind].append(fields[1])
+for kind in ('ED25519', 'RSA'):
+    if not seen[kind] or any(value != trusted[kind] for value in seen[kind]):
+        raise SystemExit(
+            'GitHub ' + kind + ' host fingerprint mismatch; expected ' + trusted[kind]
+        )
+PY
+  then
+    rm -f "$scan_file" "$fingerprint_file"
+    fail 'GitHub host fingerprint verification failed; no known_hosts entry was written'
+  fi
+  GITHUB_VERIFIED_SCAN_FILE="$scan_file"
+  GITHUB_VERIFIED_FINGERPRINTS_FILE="$fingerprint_file"
+}
+
+fingerprint_value() {
+  awk '$2 ~ /^SHA256:/ { print $2; exit }'
+}
+
+ensure_github_key_pair() {
+  local derived_file private_fingerprint public_fingerprint
+  refuse_symlink_path "$GITHUB_SSH_KEY"
+  refuse_symlink_path "$GITHUB_SSH_PUBLIC_KEY"
+
+  if [[ ! -e "$GITHUB_SSH_KEY" && -e "$GITHUB_SSH_PUBLIC_KEY" ]]; then
+    fail "GitHub public key exists without ${GITHUB_SSH_KEY}; remove the orphan only after verifying it is not registered"
+  fi
+  if [[ ! -e "$GITHUB_SSH_KEY" ]]; then
+    run_as_app_user_literal ssh-keygen -q -t ed25519 -N '' -C 'openclaw-vps github' -f "$GITHUB_SSH_KEY" || \
+      fail 'could not create the dedicated GitHub SSH key'
+  fi
+
+  derived_file="$(mktemp "$GITHUB_SSH_DIR/.github-public.XXXXXX")" || return 1
+  chmod 0600 "$derived_file"
+  if ! run_as_app_user_literal ssh-keygen -y -f "$GITHUB_SSH_KEY" >"$derived_file"; then
+    rm -f "$derived_file"
+    fail "could not read ${GITHUB_SSH_KEY}; refusing to replace the private key"
+  fi
+  private_fingerprint="$(run_as_app_user_literal ssh-keygen -lf "$derived_file" -E sha256 | fingerprint_value)" || {
+    rm -f "$derived_file"
+    fail 'could not fingerprint the dedicated GitHub private key'
+  }
+
+  if [[ -e "$GITHUB_SSH_PUBLIC_KEY" ]]; then
+    public_fingerprint="$(run_as_app_user_literal ssh-keygen -lf "$GITHUB_SSH_PUBLIC_KEY" -E sha256 | fingerprint_value)" || {
+      rm -f "$derived_file"
+      fail 'could not fingerprint the existing GitHub public key'
+    }
+    if [[ -z "$private_fingerprint" || "$private_fingerprint" != "$public_fingerprint" ]]; then
+      rm -f "$derived_file"
+      fail "GitHub private/public key mismatch for ${GITHUB_SSH_KEY}; inspect the pair and do not replace the private key"
+    fi
+    rm -f "$derived_file"
+  else
+    mv "$derived_file" "$GITHUB_SSH_PUBLIC_KEY" || {
+      rm -f "$derived_file"
+      fail 'could not recover the missing GitHub public key'
+    }
+  fi
+
+  chown "$APP_USER:$APP_USER" "$GITHUB_SSH_KEY" "$GITHUB_SSH_PUBLIC_KEY"
+  chmod 0600 "$GITHUB_SSH_KEY"
+  chmod 0644 "$GITHUB_SSH_PUBLIC_KEY"
+}
+
+append_verified_github_known_hosts() {
+  python3 - "$GITHUB_KNOWN_HOSTS" "$GITHUB_VERIFIED_SCAN_FILE" <<'PY'
+import os
+import pathlib
+import stat
+import sys
+import tempfile
+
+known_hosts = pathlib.Path(sys.argv[1])
+scan_file = pathlib.Path(sys.argv[2])
+old = known_hosts.read_bytes() if known_hosts.exists() else b''
+existing = set(line.rstrip(b'\r\n') for line in old.splitlines())
+new = bytearray(old)
+if new and not new.endswith(b'\n'):
+    new.extend(b'\n')
+for line in scan_file.read_bytes().splitlines():
+    if line and line not in existing:
+        new.extend(line + b'\n')
+        existing.add(line)
+new_bytes = bytes(new)
+if new_bytes != old:
+    fd, temporary = tempfile.mkstemp(prefix='.github-known-hosts.', dir=str(known_hosts.parent))
+    try:
+        os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(new_bytes)
+        os.replace(temporary, str(known_hosts))
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+PY
+  chown "$APP_USER:$APP_USER" "$GITHUB_KNOWN_HOSTS"
+  chmod 0644 "$GITHUB_KNOWN_HOSTS"
+}
+
+prepare_github_ssh() {
+  local fingerprints
+  [[ "$GITHUB_SSH_KEY" != "$SANDBOX_SSH_KEY" ]] || \
+    fail 'GitHub SSH key path must remain distinct from the provisioning/sandbox SSH key'
+  refuse_symlink_path "$GITHUB_SSH_DIR"
+  refuse_symlink_path "$GITHUB_SSH_KEY"
+  refuse_symlink_path "$GITHUB_SSH_PUBLIC_KEY"
+  refuse_symlink_path "$GITHUB_SSH_CONFIG"
+  refuse_symlink_path "$GITHUB_KNOWN_HOSTS"
+  install -d -o "$APP_USER" -g "$APP_USER" -m 0700 "$GITHUB_SSH_DIR"
+  chown "$APP_USER:$APP_USER" "$GITHUB_SSH_DIR"
+  chmod 0700 "$GITHUB_SSH_DIR"
+
+  # Check before scanning or creating anything so a pre-existing conflicting
+  # IdentityFile cannot be hidden by a later Host github.com block.
+  check_or_write_github_ssh_config check
+  verify_github_host_keys
+  ensure_github_key_pair
+  check_or_write_github_ssh_config write
+  chown "$APP_USER:$APP_USER" "$GITHUB_SSH_CONFIG"
+  chmod 0600 "$GITHUB_SSH_CONFIG"
+  append_verified_github_known_hosts
+
+  fingerprints="$(cat "$GITHUB_VERIFIED_FINGERPRINTS_FILE")"
+  rm -f "$GITHUB_VERIFIED_SCAN_FILE" "$GITHUB_VERIFIED_FINGERPRINTS_FILE"
+  unset GITHUB_VERIFIED_SCAN_FILE GITHUB_VERIFIED_FINGERPRINTS_FILE
+  printf 'GitHub SSH public key (register this key with GitHub):\n'
+  cat "$GITHUB_SSH_PUBLIC_KEY"
+  printf 'Verified GitHub host fingerprints:\n%s\n' "$fingerprints"
+}
+
+# No login shell here: env -i is the final boundary AFTER sudo/PAM/user startup.
+# In particular no token override, GH_DEBUG, alternate config, or git injection
+# environment can reach gh or git. Executables are resolved/verified beforehand.
+run_github_clean() {
+  sudo -u "$APP_USER" -H -- env -i HOME="$APP_HOME" PATH=/usr/local/bin:/usr/bin:/bin GIT_TERMINAL_PROMPT=0 "$@"
+}
+
+github_stored_login_works() {
+  run_github_clean "$github_gh" auth status --hostname github.com >/dev/null 2>&1 &&
+    run_github_clean "$github_gh" api --hostname github.com user --jq .login 2>/dev/null |
+      python3 -c 'import re, sys
+sys.exit(0 if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", sys.stdin.read().strip()) else 1)' >/dev/null 2>&1
+}
+
+verify_github_persistence() {
+  github_stored_login_works || return 1
+  # Resolve the actual HTTPS helper and invoke it through git, without ever
+  # printing its password response. An API-only token is not enough for success.
+  run_github_clean "$github_git" config --get-urlmatch credential.helper https://github.com >/dev/null 2>&1 || return 1
+  printf 'protocol=https\nhost=github.com\n\n' |
+    run_github_clean "$github_git" credential fill 2>/dev/null |
+    python3 -c 'import sys
+fields = dict(line.rstrip("\n").split("=", 1) for line in sys.stdin if "=" in line)
+sys.exit(0 if fields.get("username") and fields.get("password") else 1)' >/dev/null 2>&1
+}
+
+github_require_managed_installation() {
+  local path
+  [[ -d "$APP_HOME" && -s "$AGENTS_FILE" && -s "$GROUPS_FILE" && -s "$OPENCLAW_CONFIG_FILE" ]] || \
+    fail 'github-bootstrap requires a usable managed OpenClaw installation'
+  jq -e '.agents | type == "array" and length > 0' "$AGENTS_FILE" >/dev/null || fail 'no managed agents installed'
+  jq -e '.groups | type == "array" and length > 0' "$GROUPS_FILE" >/dev/null || fail 'no managed groups installed'
+  jq -e '.agents | type == "object"' "$OPENCLAW_CONFIG_FILE" >/dev/null || fail 'invalid managed OpenClaw config'
+  jq -e --slurpfile managed "$AGENTS_FILE" --slurpfile groups "$GROUPS_FILE" '
+    [.agents.list[]?, .agents.entries[]?] as $configured |
+    all($managed[0].agents[]; . as $agent |
+      any($configured[]; .id == $agent.id) and
+      any($groups[0].groups[]; .id == $agent.group))
+  ' "$OPENCLAW_CONFIG_FILE" >/dev/null || fail 'managed agents/groups are absent from the installed config'
+  while IFS= read -r path; do
+    [[ -d "$path" ]] || fail 'managed workspace is missing; repair installation before bootstrap'
+  done < <(jq -r '.agents[].workspace' "$AGENTS_FILE")
+  resolve_agent_state >/dev/null || fail 'managed agent state is not usable; repair it before bootstrap'
+}
+
+# Internal, fixed SSH transports. The token is staged privately by invocation ID
+# so transfer can never overwrite existing working credentials before approval.
+github_import_path() {
+  [[ "$1" =~ ^[A-Za-z0-9]{6,64}$ ]] || fail 'invalid GitHub transfer identifier'
+  printf '%s/.config/openclaw-vps/secrets/.GH_TOKEN.import.%s' "$APP_HOME" "$1"
+}
+
+cmd_github_token_stage() (
+  set +x
+  umask 077
+  [[ $# == 1 ]] || fail 'GitHub staging requires a transfer identifier'
+  require_root
+  github_require_managed_installation
+  staged_file="$(github_import_path "$1")"
+  refuse_symlink_path "$staged_file" || exit 1
+  [[ ! -e "$staged_file" ]] || fail 'GitHub transfer identifier already exists'
+  for directory in "$APP_HOME/.config" "$APP_HOME/.config/openclaw-vps" "${staged_file%/*}"; do
+    mkdir -p "$directory"
+    chmod 700 "$directory"
+    chown "$APP_USER:$APP_USER" "$directory"
+  done
+  staging_tmp="$(mktemp "${staged_file%/*}/.github-transfer.XXXXXX")"
+  trap 'rm -f "$staging_tmp"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM HUP
+  # Bounded pipe input, no token-bearing command arguments, trace, or diagnostics.
+  python3 -c 'import sys
+value = sys.stdin.buffer.read(8193)
+if not value.strip() or len(value) > 8192 or b"\x00" in value:
+    sys.exit(1)
+sys.stdout.buffer.write(value)' >"$staging_tmp" || fail 'invalid GitHub credential transfer'
+  chmod 600 "$staging_tmp"
+  chown "$APP_USER:$APP_USER" "$staging_tmp"
+  mv "$staging_tmp" "$staged_file"
+)
+
+cmd_github_token_discard() (
+  set +x
+  [[ $# == 1 ]] || fail 'GitHub discard requires a transfer identifier'
+  require_root
+  staged_file="$(github_import_path "$1")"
+  refuse_symlink_path "$staged_file" || exit 1
+  rm -f "$staged_file"
+)
+
+# Subshell keeps xtrace off through EXIT/rollback and restores the caller's shell
+# options only after every secret variable and open credential fd is gone.
+cmd_github_bootstrap() (
+  set +x
+  umask 077
+  import_file=''
+  if [[ $# != 0 ]]; then
+    [[ $# == 2 && "$1" == --import-id ]] || fail 'github-bootstrap takes no token arguments; use its interactive terminal'
+    import_file="$(github_import_path "$2")"
+  fi
+  path=''
+  require_root
+  [[ -t 0 ]] || fail 'github-bootstrap requires an interactive terminal; run the manager directly'
+  exec 3<>/dev/tty || fail 'github-bootstrap requires a controlling terminal'
+  github_require_managed_installation
+
+  # Bash 3.2 unwinds function locals before EXIT on an explicit failure. These
+  # variables belong to this subshell so rollback still has its complete state.
+  github_gh='' github_git='' auth_dir='' secret_dir='' token_file='' answer='' token=''
+  transaction='' committed=0 snapshot_ready=0 terminal_mode='' lock_dir=''
+  paths=()
+  index=0 saved='' rollback_ok=1
+  github_gh="$(resolve_verified_host_tool gh)" || return 1
+  github_git="$(resolve_verified_host_tool git)" || return 1
+  auth_dir="$APP_HOME/.config/gh"
+  secret_dir="$APP_HOME/.config/openclaw-vps/secrets"
+  token_file="$secret_dir/GH_TOKEN"
+  export -n token
+  paths=("$auth_dir/hosts.yml" "$auth_dir/config.yml" "$APP_HOME/.gitconfig" "$APP_HOME/.config/git/config" "$token_file")
+  # Refuse every parent/link before identity helpers, chmod, or credential writes.
+  if [[ -n "$import_file" ]]; then
+    refuse_symlink_path "$import_file" || return 1
+    [[ -f "$import_file" && -s "$import_file" ]] || fail 'copied GitHub credential is missing; retry from the manager'
+  fi
+  for path in "${paths[@]}"; do
+    refuse_symlink_path "$path" || return 1
+    [[ ! -e "$path" || -f "$path" ]] || fail 'GitHub credential/config output must be a regular file'
+  done
+  for path in "$APP_HOME/.config" "$APP_HOME/.config/openclaw-vps" "$secret_dir" "$auth_dir"; do
+    mkdir -p "$path"
+    chmod 700 "$path"
+    chown "$APP_USER:$APP_USER" "$path"
+  done
+  lock_dir="$secret_dir/.github-bootstrap.lock"
+  mkdir "$lock_dir" 2>/dev/null || fail 'GitHub bootstrap already running; inspect any stale lock before retrying'
+  github_bootstrap_cleanup() {
+    local status=$?
+    set +x
+    unset token
+    [[ -z "$import_file" ]] || rm -f "$import_file"
+    # A disconnected terminal must not prevent credential rollback/lock cleanup.
+    [[ -z "$terminal_mode" ]] || stty "$terminal_mode" <&3 2>/dev/null || true
+    rollback_ok=1
+    if [[ "$snapshot_ready" == 1 && "$committed" != 1 ]]; then
+      index=0
+      for path in "${paths[@]}"; do
+        saved="$transaction/$index"
+        if [[ -f "$saved" ]]; then
+          # Each restore is a same-filesystem atomic rename of the private copy.
+          mv -f "$saved" "$path" || rollback_ok=0
+        else
+          rm -f "$path" || rollback_ok=0
+        fi
+        index=$((index + 1))
+      done
+    fi
+    if [[ "$rollback_ok" == 1 ]]; then
+      [[ -z "$transaction" ]] || rm -rf "$transaction"
+      rmdir "$lock_dir"
+    else
+      printf 'GitHub rollback failed; private recovery files retained at %s\n' "$transaction" >&2
+      status=1
+    fi
+    exit "$status"
+  }
+  trap github_bootstrap_cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM HUP
+  transaction="$(mktemp -d "$secret_dir/.github-transaction.XXXXXX")"
+  index=0
+  for path in "${paths[@]}"; do
+    if [[ -f "$path" ]]; then
+      chmod 600 "$path"
+      chown "$APP_USER:$APP_USER" "$path"
+      cp -p "$path" "$transaction/$index"
+    fi
+    index=$((index + 1))
+  done
+  snapshot_ready=1
+  seed_exec_allowlist || fail 'GitHub bootstrap failed to add git/gh approvals; retry after repairing approvals'
+  ensure_git_identity <&3
+  printf 'Optional GitHub SSH setup (separate from HTTPS login) [y/N]: ' >&3
+  IFS= read -r answer <&3 || fail 'GitHub bootstrap cancelled'
+  case "$answer" in y|Y|yes) prepare_github_ssh ;; esac
+
+  answer=y
+  # An API outage must never become implicit permission to replace credentials.
+  # Also protect stored (possibly expired) material even when status is failing.
+  if [[ -s "$auth_dir/hosts.yml" || -s "$token_file" ]] ||
+     run_github_clean "$github_gh" auth status --hostname github.com >/dev/null 2>&1; then
+    printf 'Replace existing GitHub login? [y/N]: ' >&3
+    IFS= read -r answer <&3 || fail 'GitHub bootstrap cancelled; existing login preserved'
+  fi
+  case "$answer" in
+    y|Y|yes)
+      if [[ -n "$import_file" ]]; then
+        cp "$import_file" "$transaction/token"
+        rm -f "$import_file"
+      else
+        # Disable echo before publishing the prompt (including for PTY callers).
+        terminal_mode="$(stty -g <&3)"
+        stty -echo <&3
+        printf 'GitHub token (hidden): ' >&3
+        IFS= read -r -s token <&3 || fail 'GitHub token input failed; retry bootstrap'
+        stty "$terminal_mode" <&3
+        terminal_mode=''
+        printf '\n' >&3
+        [[ -n "$token" ]] || fail 'GitHub token is empty; retry bootstrap'
+        printf '%s\n' "$token" > "$transaction/token"
+        unset token
+      fi
+      chmod 600 "$transaction/token"
+      chown "$APP_USER:$APP_USER" "$transaction/token"
+      mv -f "$transaction/token" "$token_file"
+      # Explicit file storage avoids mutating an OS keyring that rollback cannot restore.
+      # stdin is the file, NEVER token-bearing argv or executable shell text.
+      # Suppress both streams: a failed CLI may include the token in its error.
+      run_github_clean "$github_gh" auth login --hostname github.com --git-protocol https --with-token --insecure-storage \
+        < "$token_file" >/dev/null 2>&1 || fail 'GitHub login failed; check token type/scopes and retry bootstrap'
+      ;;
+  esac
+  run_github_clean "$github_gh" auth setup-git --hostname github.com >/dev/null 2>&1 || \
+    fail 'GitHub credential helper setup failed; retry bootstrap'
+  for path in "${paths[@]}"; do
+    refuse_symlink_path "$path" || return 1
+    if [[ -f "$path" ]]; then
+      chmod 600 "$path"
+      chown "$APP_USER:$APP_USER" "$path"
+    fi
+  done
+  verify_github_persistence || fail 'GitHub persistence verification failed; check token type/scopes and retry bootstrap'
+  committed=1
+  printf 'GitHub stored login, API identity, and HTTPS credential helper verified without token environment variables.\n'
+  printf 'Credentials are shared by the service account; private token and gh config files must remain secret.\n'
+)
+
 run_as_app_user_with_env() {
   local command_text="$1"
   sudo -Hiu "$APP_USER" bash -lc "set -a; [[ -r '${USER_ENV_FILE}' ]] && . '${USER_ENV_FILE}'; set +a; export PATH='${USER_BIN_DIR}:/usr/local/bin:/usr/bin:/bin'; ${command_text}"
+}
+
+# All local OpenClaw operations use the gateway account, PATH and active state.
+# The env file may select a nondefault state directory (including SQLite stores).
+run_openclaw_local() {
+  run_as_app_user_with_env "export HOME=$(shell_quote "$APP_HOME"); if [[ -z \${OPENCLAW_STATE_DIR:-} ]]; then export OPENCLAW_STATE_DIR=$(shell_quote "$OPENCLAW_CONFIG_DIR"); fi; if [[ -z \${OPENCLAW_CONFIG_PATH:-} ]]; then export OPENCLAW_CONFIG_PATH=$(shell_quote "$OPENCLAW_CONFIG_FILE"); fi; $1"
+}
+
+verify_system_executable() {
+  python3 - "$1" <<'PY'
+import os, pathlib, sys
+try:
+    p = pathlib.Path(sys.argv[1])
+    if not p.is_absolute() or not p.is_file() or not os.access(p, os.X_OK):
+        raise ValueError('not an absolute executable file')
+    # Check both the PATH spelling and symlink target, including every ancestor.
+    for path in (p, p.resolve(strict=True)):
+        for item in (path, *path.parents):
+            link = item.lstat()
+            meta = item.stat()
+            if link.st_uid != 0 or meta.st_uid != 0 or meta.st_mode & 0o022:
+                raise ValueError('not root-owned or writable by group/others: ' + str(item))
+except (OSError, ValueError) as exc:
+    sys.exit('untrusted executable: ' + str(exc))
+PY
+}
+
+resolve_verified_host_tool() {
+  local path
+  path="$(run_as_app_user "command -v $1")" || { warn "missing host tool: $1"; return 1; }
+  verify_system_executable "$path" || return 1
+  run_as_app_user "$(shell_quote "$path") --version" >/dev/null || { warn "host tool does not function: $1"; return 1; }
+  printf '%s\n' "$path"
+}
+
+ensure_git_gh_installed() (
+  # Pinned release: version, archive name and manifest always come from one tag.
+  # Do not use an unverified latest redirect or a separately maintained digest.
+  local version=2.78.0 arch name base tmp path
+  path="$(run_as_app_user 'command -v git')" || path=''
+  if [[ -z "$path" ]]; then
+    apt-get install -y git || return 1
+  fi
+  resolve_verified_host_tool git >/dev/null || return 1
+  path="$(run_as_app_user 'command -v gh')" || path=''
+  if [[ -n "$path" ]]; then
+    verify_system_executable "$path" || return 1
+    if run_as_app_user "$(shell_quote "$path") --version" >/dev/null; then
+      return 0
+    fi
+  fi
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) warn 'unsupported architecture for GitHub CLI release'; return 1 ;;
+  esac
+  name="gh_${version}_linux_${arch}"
+  base="https://github.com/cli/cli/releases/download/v${version}"
+  tmp="$(mktemp -d)" || return 1
+  trap 'rm -rf "$tmp"' EXIT
+  chmod 0700 "$tmp" || return 1
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --output "$tmp/archive.tar.gz" "$base/$name.tar.gz" || return 1
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --output "$tmp/checksums.txt" "$base/gh_${version}_checksums.txt" || return 1
+  # Verify the digest before even opening the archive. Inspect ALL members before
+  # reading just bin/gh; no tar extraction ever writes attacker-chosen paths.
+  python3 - "$tmp" "$name" <<'PY'
+import hashlib, pathlib, re, sys, tarfile
+try:
+    root, name = pathlib.Path(sys.argv[1]), sys.argv[2]
+    matches = []
+    for line in (root / 'checksums.txt').read_text().splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1].lstrip('*') == name + '.tar.gz':
+            matches.append(fields[0])
+    if len(matches) != 1 or not re.fullmatch('[a-fA-F0-9]{64}', matches[0]):
+        raise ValueError('missing or ambiguous release checksum')
+    archive = root / 'archive.tar.gz'
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != matches[0].lower():
+        raise ValueError('release checksum mismatch')
+    with tarfile.open(archive, 'r:gz') as tf:
+        members = tf.getmembers()
+        seen = set()
+        executable = None
+        for item in members:
+            parts = item.name.split('/')
+            if (item.name.startswith('/') or '..' in parts or '\\' in item.name
+                    or parts[0] != name or item.name in seen
+                    or not (item.isfile() or item.isdir())):
+                raise ValueError('unsafe release archive member: ' + item.name)
+            seen.add(item.name)
+            if item.name == name + '/bin/gh':
+                executable = item
+        if executable is None or not executable.isfile() or not executable.mode & 0o111:
+            raise ValueError('missing release executable')
+        with tf.extractfile(executable) as source, (root / 'gh').open('xb') as dest:
+            import shutil
+            shutil.copyfileobj(source, dest)
+except (OSError, ValueError, tarfile.TarError) as exc:
+    sys.exit('GitHub CLI verification failed: ' + str(exc))
+PY
+  [[ "$?" == 0 ]] || return 1
+  install -o root -g root -m 0755 "$tmp/gh" "$GH_INSTALL_PATH" || return 1
+  resolve_verified_host_tool gh >/dev/null || return 1
+)
+
+# Capability adapter: config schema --json emits JSON Schema, with the exec
+# object under properties.tools.properties.exec (verified locally in 2026.9.1).
+# Legacy is accepted only when that local schema explicitly lists security/ask
+# and has no mode. Unrecognized/ref-based shapes fail closed, never guess a version.
+detect_exec_config_policy() {
+  local schema
+  schema="$(run_openclaw_local 'openclaw config schema --json' | jq -ce '.properties.tools.properties.exec.properties | select(type == "object")')" || { warn 'cannot determine supported exec schema'; return 1; }
+  python3 - "$schema" "$OPENCLAW_CONFIG_FILE" <<'PY'
+import json, pathlib, sys
+try:
+    props = json.loads(sys.argv[1])
+    normalized = 'allowlist' in props.get('mode', {}).get('enum', [])
+    legacy = ('mode' not in props and 'allowlist' in props.get('security', {}).get('enum', [])
+              and 'off' in props.get('ask', {}).get('enum', []))
+    if not (normalized or legacy) or props.get('strictInlineEval', {}).get('type') != 'boolean':
+        raise ValueError('unsupported or ambiguous exec schema')
+    path = pathlib.Path(sys.argv[2])
+    try:
+        current = json.loads(path.read_text()) if path.exists() else {}
+    except json.JSONDecodeError:
+        # Retain the generator's existing recovery for an unusable JSON file.
+        current = {}
+    old = current.get('tools', {}).get('exec') if isinstance(current, dict) else None
+    if old is not None and not isinstance(old, dict):
+        raise ValueError('invalid existing exec policy')
+    if old is None or not {'mode', 'security', 'ask'}.intersection(old):
+        policy = dict(old or {}, host='gateway')
+        policy.setdefault('strictInlineEval', True)
+        policy.update(dict(mode='allowlist') if normalized else dict(security='allowlist', ask='off'))
+    else:
+        policy = old.copy()
+        if 'mode' in old and ('security' in old or 'ask' in old):
+            raise ValueError('ambiguous existing exec policy')
+        if normalized and 'mode' not in old:
+            # Only lossless conversions. E.g. ask:always must not become on-miss.
+            sec, ask = old.get('security'), old.get('ask')
+            mapping = {('deny', 'off'): 'deny', ('allowlist', 'off'): 'allowlist',
+                       ('allowlist', 'on-miss'): 'ask', ('full', 'off'): 'full'}
+            if (sec, ask) not in mapping:
+                raise ValueError('existing exec policy cannot be normalized without changing policy')
+            policy.pop('security'); policy.pop('ask')
+            policy['mode'] = mapping[(sec, ask)]
+        if legacy and 'mode' in old:
+            raise ValueError('installed legacy schema cannot preserve existing mode policy')
+        field = 'mode' if normalized else 'security'
+        if policy.get(field) not in props.get(field, {}).get('enum', []):
+            raise ValueError('unsupported existing exec policy')
+    print(json.dumps(policy))
+except (OSError, ValueError, KeyError, TypeError) as exc:
+    sys.exit('unsupported exec schema/policy: ' + str(exc))
+PY
+}
+
+validate_openclaw_config() {
+  chown "$APP_USER:$APP_USER" "$1" || return 1
+  chmod 0600 "$1" || return 1
+  run_openclaw_local "OPENCLAW_CONFIG_PATH=$(shell_quote "$1") openclaw config validate --json" >/dev/null || {
+    warn 'generated OpenClaw config validation failed; current config preserved'
+    return 1
+  }
 }
 
 install_openclaw_and_opencode() {
@@ -892,38 +1818,12 @@ EOF
 }
 
 regenerate_openclaw_config() {
+  local resolved_agents exec_policy
+  resolved_agents="$(resolve_agent_state)" || return 1
+  exec_policy="$(detect_exec_config_policy)" || return 1
   load_model_env_from_file
   resolve_openclaw_timezone
   log "writing OpenClaw config for ${MODEL_PROVIDER:-configured provider} ${MODEL_ID}"
-  ensure_state_files
-
-  local invalid_state
-  if ! invalid_state="$(jq -r '
-    .agents[]? as $agent |
-    ([
-      ["subagents", "object"],
-      ["skills", "array"],
-      ["contextInjection", "string"],
-      ["bootstrapMaxChars", "number"],
-      ["bootstrapTotalMaxChars", "number"],
-      ["tools", "object"],
-      ["heartbeat", "object"]
-    ][] | .[0] as $field | .[1] as $expected |
-    if ($agent | has($field) | not) then empty
-    elif ($agent[$field] | type) != $expected then
-      [$agent.id, $field, $expected] | @tsv
-    elif ($field == "skills" and any($agent[$field][]; type != "string")) then
-      [$agent.id, $field, "array of strings"] | @tsv
-    else empty end
-    )
-  ' "$AGENTS_FILE")"; then
-    return 1
-  fi
-  if [[ -n "$invalid_state" ]]; then
-    local agent_id field expected
-    IFS=$'\t' read -r agent_id field expected <<<"$invalid_state"
-    fail "invalid agents.json: agent \"${agent_id}\" field \"${field}\" must be ${expected}"
-  fi
 
   sync_all_agent_workspace_skills
   install -d -o "$APP_USER" -g "$APP_USER" -m 0700 "$OPENCLAW_CONFIG_DIR"
@@ -951,8 +1851,8 @@ regenerate_openclaw_config() {
   fi
 
   if ! jq -n \
-    --slurpfile groups "$GROUPS_FILE" \
-    --slurpfile agents "$AGENTS_FILE" \
+    --argjson agents "[$resolved_agents]" \
+    --argjson execPolicy "$exec_policy" \
     --slurpfile preserved "$preserve_file" \
     --arg provider "$MODEL_PROVIDER" \
     --arg baseUrl "$MODEL_BASE_URL" \
@@ -961,15 +1861,9 @@ regenerate_openclaw_config() {
     --arg skillsCsv "$OPENCLAW_AGENT_SKILLS" \
     --arg port "$OPENCLAW_PORT" \
     --arg timezone "$OPENCLAW_TIMEZONE" \
-    --arg defaultWorkspace "$OPENCLAW_WORKSPACE" \
     --arg defaultAgent "$DEFAULT_AGENT_ID" \
-    --arg remoteWorkspaceRoot "$INCUS_REMOTE_WORKSPACE_ROOT" \
-    --arg sandboxKey "$SANDBOX_SSH_KEY" \
-    --arg knownHostsDir "$SANDBOX_KNOWN_HOSTS_DIR" \
     '
     def envref($name): "${" + $name + "}";
-    def group_port($id): ($groups[0].groups[] | select(.id == $id) | .sshPort);
-    def known_hosts($id): $knownHostsDir + "/" + $id + "_known_hosts";
     def skill_allowlist: ($skillsCsv | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != "")));
     ($agents[0].agents | map(select(.telegramTokenEnv != ""))) as $telegramAgents |
     (($agents[0].agents | map(select(.default == true)) | .[0].id) // $agents[0].agents[0].id // $defaultAgent) as $defaultAgent |
@@ -1006,7 +1900,7 @@ regenerate_openclaw_config() {
       },
       agents: {
         defaults: {
-          workspace: $defaultWorkspace,
+          workspace: ($agents[0].agents[] | select(.id == $defaultAgent) | .workspace),
           userTimezone: $timezone,
           model: { primary: $model }
         },
@@ -1020,21 +1914,7 @@ regenerate_openclaw_config() {
             workspace: .workspace,
             agentDir: .agentDir,
             model: { primary: $model },
-            sandbox: {
-              mode: "all",
-              backend: "ssh",
-              scope: "session",
-              workspaceAccess: "rw",
-              ssh: {
-                target: ("openclaw@127.0.0.1:" + (group_port(.group) | tostring)),
-                workspaceRoot: $remoteWorkspaceRoot,
-                strictHostKeyChecking: true,
-                updateHostKeys: false,
-                identityFile: $sandboxKey,
-                knownHostsFile: known_hosts(.group)
-              },
-              browser: { enabled: false }
-            }
+            sandbox: .sandbox
           }
           + (if (.subagents? | type) == "object" then {subagents: .subagents} else {} end)
           + (if (.skills? | type) == "array" then {skills: .skills}
@@ -1053,12 +1933,7 @@ regenerate_openclaw_config() {
           enabled: ((telegram_elevated_ids | length) > 0),
           allowFrom: { telegram: telegram_elevated_ids }
         },
-        exec: {
-          host: "gateway",
-          security: "allowlist",
-          ask: "off",
-          strictInlineEval: true
-        },
+        exec: $execPolicy,
         loopDetection: {
           enabled: true,
           historySize: 30,
@@ -1110,6 +1985,7 @@ regenerate_openclaw_config() {
   if ! jq -e 'type == "object"' "$config_tmp" >/dev/null; then
     return 1
   fi
+  validate_openclaw_config "$config_tmp" || return 1
   mv "$config_tmp" "$OPENCLAW_CONFIG_FILE"
   chown "$APP_USER:$APP_USER" "$OPENCLAW_CONFIG_FILE"
   chmod 0600 "$OPENCLAW_CONFIG_FILE"
@@ -1265,6 +2141,10 @@ USER_BIN_DIR="${USER_BIN_DIR}"
 GROUPS_FILE="${GROUPS_FILE}"
 NODE_MAJOR="${NODE_MAJOR}"
 AGENTS_FILE="${AGENTS_FILE}"
+OPENCLAW_CONFIG_FILE="${OPENCLAW_CONFIG_FILE}"
+APP_HOME="${APP_HOME}"
+
+$(declare -f resolve_agent_state)
 GROUPS_FILE="${GROUPS_FILE}"
 SANDBOX_SSH_KEY="${SANDBOX_SSH_KEY}"
 SANDBOX_KNOWN_HOSTS_DIR="${SANDBOX_KNOWN_HOSTS_DIR}"
@@ -1288,25 +2168,36 @@ extract_required_env() {
 }
 
 check_bin() {
-  local port="\$1"
-  local known_hosts="\$2"
-  local bin="\$3"
-  sudo -Hiu "\$APP_USER" ssh -i "\$SANDBOX_SSH_KEY" \
-    -o BatchMode=yes \
-    -o StrictHostKeyChecking=yes \
-    -o UserKnownHostsFile="\$known_hosts" \
-    -p "\$port" "\$APP_USER@127.0.0.1" "command -v \$(printf '%q' "\$bin") >/dev/null 2>&1"
+  sandbox_run "\$1" "\$2" "command -v \$(printf '%q' "\$3") >/dev/null 2>&1"
 }
 
+# mode/backend come from the resolved policy for this agent, never its Incus group.
 sandbox_run() {
-  local port="\$1"
-  local known_hosts="\$2"
   local command_text="\$3"
-  sudo -Hiu "\$APP_USER" ssh -i "\$SANDBOX_SSH_KEY" \
-    -o BatchMode=yes \
-    -o StrictHostKeyChecking=yes \
-    -o UserKnownHostsFile="\$known_hosts" \
-    -p "\$port" "\$APP_USER@127.0.0.1" "\$command_text"
+  if [[ "\$sandbox_mode" == off ]]; then
+    sudo -Hiu "\$APP_USER" bash -lc "set -a; [[ ! -r '\$USER_ENV_FILE' ]] || . '\$USER_ENV_FILE'; set +a; export PATH='\$USER_BIN_DIR:/usr/local/bin:/usr/bin:/bin'; cd \$(printf '%q' "\$workspace"); \$command_text"
+  elif [[ "\$sandbox_backend" == ssh ]]; then
+    local target port identity known_hosts strict update remote_workspace
+    local -a options=()
+    target="\$(jq -r '.sandbox.ssh.target' <<<"\$agent_row")"
+    identity="\$(jq -r '.sandbox.ssh.identityFile // empty' <<<"\$agent_row")"
+    known_hosts="\$(jq -r '.sandbox.ssh.knownHostsFile // empty' <<<"\$agent_row")"
+    strict="\$(jq -r 'if .sandbox.ssh.strictHostKeyChecking == false then "no" else "yes" end' <<<"\$agent_row")"
+    update="\$(jq -r 'if .sandbox.ssh.updateHostKeys == true then "yes" else "no" end' <<<"\$agent_row")"
+    remote_workspace="\$(jq -r '.sandbox.ssh.workspaceRoot // empty' <<<"\$agent_row")"
+    if [[ "\$target" =~ :[0-9]+$ ]]; then
+      port="\${target##*:}"
+      target="\${target%:*}"
+      options+=( -p "\$port" )
+    fi
+    [[ -z "\$identity" ]] || options+=( -i "\$identity" )
+    [[ -z "\$known_hosts" ]] || options+=( -o "UserKnownHostsFile=\$known_hosts" )
+    [[ -z "\$remote_workspace" ]] || command_text="cd \$(printf '%q' "\$remote_workspace"); \$command_text"
+    sudo -Hiu "\$APP_USER" ssh -o BatchMode=yes -o "StrictHostKeyChecking=\$strict" -o "UpdateHostKeys=\$update" "\${options[@]}" "\$target" "\$command_text"
+  else
+    printf 'UNVERIFIED dependency backend: %s (no host/container substitution)\n' "\$sandbox_backend" >&2
+    return 1
+  fi
 }
 
 check_sandbox_runtime() {
@@ -1330,7 +2221,7 @@ check_sandbox_runtime() {
     printf 'MISSING python pip\n'
     missing_count="\$((missing_count + 1))"
   fi
-  if ! sandbox_run "\$port" "\$known_hosts" 'rm -rf /tmp/openclaw-vps-venv-check && python3 -m venv /tmp/openclaw-vps-venv-check && rm -rf /tmp/openclaw-vps-venv-check'; then
+  if ! sandbox_run "\$port" "\$known_hosts" 'python3 -c '\''import venv, ensurepip'\'''; then
     printf 'MISSING python3 -m venv\n'
     missing_count="\$((missing_count + 1))"
   fi
@@ -1356,21 +2247,32 @@ visible_skill_files() {
   find "\$workspace/skills" -maxdepth 3 -name SKILL.md 2>/dev/null
 }
 
+resolved_agents="\$(resolve_agent_state)"
 missing_count=0
 while IFS= read -r agent_row; do
   agent_id="\$(jq -r '.id' <<<"\$agent_row")"
   group_id="\$(jq -r '.group' <<<"\$agent_row")"
   workspace="\$(jq -r '.workspace' <<<"\$agent_row")"
-  port="\$(jq -r --arg id "\$group_id" '.groups[] | select(.id == \$id) | .sshPort' "\$GROUPS_FILE")"
-  known_hosts="\$SANDBOX_KNOWN_HOSTS_DIR/\${group_id}_known_hosts"
-
-  printf '== agent %s sandbox dependencies ==\n' "\$agent_id"
+  sandbox_mode="\$(jq -r '.sandbox.mode' <<<"\$agent_row")"
+  sandbox_backend="\$(jq -r 'if .sandbox.mode == "off" then "host" else (.sandbox.backend // "docker") end' <<<"\$agent_row")"
+  exec_host="\$(jq -r --arg id "\$agent_id" '. as \$config | ([.agents.list[]? | select(.id == \$id)][0].tools.exec.host // .agents.entries[\$id].tools.exec.host // \$config.tools.exec.host // "gateway")' "\$OPENCLAW_CONFIG_FILE")"
+  port=""
+  known_hosts=""
+  printf '== agent %s workspace=%s sandbox=%s backend=%s exec=%s ==\n' "\$agent_id" "\$workspace" "\$sandbox_mode" "\$sandbox_backend" "\$exec_host"
   if check_sandbox_runtime "\$port" "\$known_hosts"; then
     printf 'OK runtime node major >= %s, npm, python3 >= 3.12, pip, venv, uv\n' "\$NODE_MAJOR"
   else
-    printf 'MISSING sandbox runtime dependency for agent %s\n' "\$agent_id"
+    printf 'MISSING execution runtime dependency for agent %s\n' "\$agent_id"
     missing_count="\$((missing_count + 1))"
   fi
+  for bin in git gh; do
+    if check_bin "\$port" "\$known_hosts" "\$bin"; then
+      printf 'OK bin %s\n' "\$bin"
+    else
+      printf 'MISSING bin %s\n' "\$bin"
+      missing_count="\$((missing_count + 1))"
+    fi
+  done
   if [[ ! -d "\$workspace/skills" ]]; then
     printf 'WARN missing skills directory: %s\n' "\$workspace/skills"
     continue
@@ -1390,7 +2292,7 @@ while IFS= read -r agent_row; do
     [[ -n "\$env_name" ]] || continue
     printf 'TODO env %s requires explicit sandbox propagation decision\n' "\$env_name"
   done < <(while IFS= read -r skill_file; do extract_required_env "\$skill_file"; done < <(visible_skill_files "\$agent_id" "\$workspace") | sort -u)
-done < <(jq -c '.agents[]?' "\$AGENTS_FILE")
+done < <(jq -c '.agents[]?' <<<"\$resolved_agents")
 
 exit "\$missing_count"
 EOF
@@ -1509,7 +2411,10 @@ EOF
 write_exec_approvals() {
   install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$STATE_DIR"
   install -d -o "$APP_USER" -g "$APP_USER" -m 0700 "$OPENCLAW_CONFIG_DIR"
-  cat >"${STATE_DIR}/exec-approvals.pending.json" <<EOF
+  local pending_tmp
+  pending_tmp="$(mktemp "${STATE_DIR}/exec-approvals.XXXXXX")" || return 1
+  chmod 0600 "$pending_tmp" || return 1
+  cat >"$pending_tmp" <<EOF
 {
   "version": 1,
   "defaults": {
@@ -1519,7 +2424,7 @@ write_exec_approvals() {
     "autoAllowSkills": false
   },
   "agents": {
-    "main": {
+    "$DEFAULT_AGENT_ID": {
       "security": "allowlist",
       "ask": "off",
       "askFallback": "deny",
@@ -1537,13 +2442,51 @@ write_exec_approvals() {
   }
 }
 EOF
+  mv "$pending_tmp" "${STATE_DIR}/exec-approvals.pending.json" || return 1
   chown "$APP_USER:$APP_USER" "${STATE_DIR}/exec-approvals.pending.json"
   chmod 0600 "${STATE_DIR}/exec-approvals.pending.json"
 }
 
+# Call only for a fresh install ("fresh") or an explicit operator bootstrap.
+# Reading exists through the CLI is essential: the active store may be SQLite.
+seed_exec_allowlist() {
+  local git_path gh_path snapshot exists pending pending_tmp
+  git_path="$(resolve_verified_host_tool git)" || return 1
+  gh_path="$(resolve_verified_host_tool gh)" || return 1
+  snapshot="$(run_openclaw_local 'openclaw approvals get --json')" || { warn 'cannot read active approvals store'; return 1; }
+  exists="$(printf '%s' "$snapshot" | jq -er 'if (.exists | type) == "boolean" and (.file | type) == "object" then (.exists | tostring) else error("unsupported approvals snapshot") end')" || return 1
+  pending="$STATE_DIR/exec-approvals.pending.json"
+  if [[ "$exists" == false && "${1:-}" == fresh ]]; then
+    write_exec_approvals || return 1
+    if ! run_openclaw_local "openclaw approvals set --file $(shell_quote "$pending")"; then
+      warn "approvals import failed; pending artifact retained at $pending; service not started"
+      return 1
+    fi
+  else
+    # Diagnostic snapshot only: NEVER re-import defaults or an existing store.
+    install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$STATE_DIR" || return 1
+    pending_tmp="$(mktemp "$STATE_DIR/exec-approvals.XXXXXX")" || return 1
+    chmod 0600 "$pending_tmp" || return 1
+    printf '%s\n' "$snapshot" >"$pending_tmp" || return 1
+    chown "$APP_USER:$APP_USER" "$pending_tmp" || return 1
+    mv "$pending_tmp" "$pending" || return 1
+  fi
+  # The supported CLI performs idempotent additions without replacing policy.
+  if ! run_openclaw_local "openclaw approvals allowlist add --agent '*' $(shell_quote "$git_path")" ||
+     ! run_openclaw_local "openclaw approvals allowlist add --agent '*' $(shell_quote "$gh_path")"; then
+    warn "approvals add failed; pending artifact retained at $pending; service not started"
+    return 1
+  fi
+  rm -f "$pending"
+}
+
 ensure_workspace_host_action_notes() {
-  ensure_state_files
-  while IFS= read -r workspace; do
+  local resolved_agents agent_id workspace sandbox_mode sandbox_backend
+  resolved_agents="$(resolve_agent_state)" || return 1
+  while IFS= read -r agent_id; do
+    workspace="$(agent_workspace "$agent_id")" || return 1
+    sandbox_mode="$(jq -r --arg id "$agent_id" ' .agents[] | select(.id == $id) | .sandbox.mode' <<<"$resolved_agents")"
+    sandbox_backend="$(jq -r --arg id "$agent_id" '.agents[] | select(.id == $id) | if .sandbox.mode == "off" then "host" else (.sandbox.backend // "docker") end' <<<"$resolved_agents")"
     [[ -n "$workspace" ]] || continue
     install -d -o "$APP_USER" -g "$APP_USER" -m 0755 "$workspace"
     local tools_file="$workspace/TOOLS.md"
@@ -1566,6 +2509,16 @@ ensure_workspace_host_action_notes() {
     cat >>"$tools_file" <<EOF
 
 ## VPS Host Actions
+
+Agent workspace: ${workspace}
+Sandbox: ${sandbox_mode}; backend: ${sandbox_backend}. Host wrapper exec: gateway.
+
+Gateway host execution uses an argument allowlist with prompting disabled.
+Unmatched commands fail closed. Baseline grants pre-allow the verified \`git\`
+and \`gh\` executables and the agent-scoped host-action wrapper below; existing
+operator policy may be stricter. Additional entries require an operator action
+with \`openclaw approvals allowlist\`. Report the missing capability to the
+operator; do not attempt to bypass the allowlist or broaden your own permissions.
 
 Approved host lifecycle actions are exposed through this exact wrapper:
 
@@ -1595,7 +2548,7 @@ Important rules:
 EOF
     chown "$APP_USER:$APP_USER" "$tools_file"
     chmod 0644 "$tools_file"
-  done < <(jq -r '.agents[]?.workspace' "$AGENTS_FILE")
+  done < <(jq -r '.agents[]?.id' <<<"$resolved_agents")
 }
 
 write_maintenance_helper() {
@@ -1708,6 +2661,7 @@ SANDBOX_KNOWN_HOSTS_DIR="${SANDBOX_KNOWN_HOSTS_DIR}"
 run_as_user() {
   sudo -Hiu "\$APP_USER" bash -lc "set -a; . '\$USER_ENV_FILE'; set +a; export PATH='\$USER_BIN_DIR:/usr/local/bin:/usr/bin:/bin'; \$*"
 }
+/usr/local/sbin/openclaw-vps-sandbox-audit || true
 while IFS= read -r row; do
   group_id="\${row%%:*}"
   rest="\${row#*:}"
@@ -1720,7 +2674,6 @@ while IFS= read -r row; do
 done < <(jq -r '.groups[]? | "\(.id):\(.container):\(.sshPort)"' "\$GROUPS_FILE")
 run_as_user "openclaw doctor"
 run_as_user "openclaw sandbox explain" || true
-/usr/local/sbin/openclaw-vps-sandbox-audit || true
 run_as_user "openclaw security audit" || true
 EOF
   chmod 0755 /usr/local/sbin/openclaw-vps-doctor
@@ -1754,6 +2707,9 @@ jq . "\$GROUPS_FILE" || true
 echo
 echo "== openclaw-vps agents =="
 jq . "${AGENTS_FILE}" || true
+echo
+echo "== agent execution environments =="
+/usr/local/sbin/openclaw-vps-sandbox-audit || true
 echo
 echo "== incus sandboxes =="
 while IFS= read -r container; do
@@ -1936,6 +2892,8 @@ lockdown_firewall() {
 }
 
 install_all() {
+  require_initial_agent_identity
+  refuse_existing_managed_state
   preflight
   apt_install_hardening_first
   configure_ssh_hardening
@@ -1959,24 +2917,17 @@ install_all() {
   install_node
   install_incus
   install_openclaw_and_opencode
+  ensure_git_gh_installed || return 1
   write_user_env "$MODEL_PROVIDER" "$MODEL_BASE_URL" "$model_api_key" "$MODEL_ID" "$MODEL_CATALOG" "$telegram_bot_token"
   ensure_user_shell_sources_env
   ensure_group "$DEFAULT_GROUP_ID"
   if ! agent_exists "$DEFAULT_AGENT_ID"; then
-    ensure_agent "$DEFAULT_AGENT_ID" "$DEFAULT_GROUP_ID" "$telegram_bot_token" "$telegram_allow_from"
+    ensure_agent "$DEFAULT_AGENT_ID" "$DEFAULT_GROUP_ID" "$telegram_bot_token" "$telegram_allow_from" "$OPENCLAW_INITIAL_AGENT_LABEL" true
   fi
   regenerate_openclaw_config
   seed_provider_auth
   write_opencode_config
-  write_exec_approvals
-  if run_as_app_user_with_env "openclaw approvals set --file $STATE_DIR/exec-approvals.pending.json"; then
-    rm -f "$STATE_DIR/exec-approvals.pending.json"
-  else
-    warn "approvals import failed; legacy file left at OPENCLAW_CONFIG_DIR/exec-approvals.json for doctor --fix"
-    cp "$STATE_DIR/exec-approvals.pending.json" "$OPENCLAW_CONFIG_DIR/exec-approvals.json"
-    chown "$APP_USER:$APP_USER" "$OPENCLAW_CONFIG_DIR/exec-approvals.json"
-    chmod 0600 "$OPENCLAW_CONFIG_DIR/exec-approvals.json"
-  fi
+  seed_exec_allowlist fresh || return 1
   install_user_systemd_service
   write_helper_scripts
   write_systemd_timers
@@ -2013,10 +2964,6 @@ restart_openclaw_gateway() {
   runuser -u "$APP_USER" -- env XDG_RUNTIME_DIR="/run/user/${uid}" systemctl --user restart "$OPENCLAW_SERVICE"
 }
 
-recreate_openclaw_sandboxes() {
-  run_as_app_user_with_env "openclaw sandbox recreate --all --force" || true
-}
-
 cmd_add_group() {
   require_root
   local group_id="${1:-}"
@@ -2024,6 +2971,7 @@ cmd_add_group() {
   validate_managed_id "$group_id"
   need_command jq
   need_command incus
+  resolve_agent_state >/dev/null || return 1
   ensure_app_user
   ensure_group "$group_id"
   regenerate_openclaw_config
@@ -2045,6 +2993,11 @@ cmd_add_agent() {
         group_id="$2"
         shift 2
         ;;
+      --sandbox)
+        [[ -n "${2:-}" ]] || fail "--sandbox requires a JSON policy object"
+        OPENCLAW_AGENT_SANDBOX="$2"
+        shift 2
+        ;;
       -y|--yes)
         ASSUME_YES=1
         shift
@@ -2060,6 +3013,7 @@ cmd_add_agent() {
   validate_managed_id "$group_id"
   need_command jq
   need_command incus
+  resolve_agent_state "$agent_id" >/dev/null || return 1
   ensure_app_user
   if ! group_exists "$group_id"; then
     if confirm "Isolation group ${group_id} does not exist. Create it now?"; then
@@ -2079,7 +3033,7 @@ cmd_add_agent() {
     read -r -p 'Numeric Telegram user ID allowlist for this agent (leave empty for pairing flow): ' telegram_allow_from
   fi
 
-  ensure_agent "$agent_id" "$group_id" "$telegram_bot_token" "$telegram_allow_from"
+  ensure_agent "$agent_id" "$group_id" "$telegram_bot_token" "$telegram_allow_from" "$agent_id" false
   regenerate_openclaw_config
   write_opencode_config
   write_helper_scripts
@@ -2104,6 +3058,7 @@ cmd_refresh_config() {
   require_root
   need_command jq
   need_command incus
+  resolve_agent_state >/dev/null || return 1
   ensure_app_user
   ensure_state_files
   resolve_openclaw_timezone
@@ -2118,7 +3073,6 @@ cmd_refresh_config() {
   write_opencode_config
   write_helper_scripts
   restart_openclaw_gateway
-  recreate_openclaw_sandboxes
   log "OpenClaw and OpenCode config refreshed"
 }
 
@@ -2194,6 +3148,15 @@ main() {
       ;;
     refresh-config)
       cmd_refresh_config
+      ;;
+    github-token-stage)
+      cmd_github_token_stage "$@"
+      ;;
+    github-token-discard)
+      cmd_github_token_discard "$@"
+      ;;
+    github-bootstrap)
+      cmd_github_bootstrap "$@"
       ;;
     serve)
       cmd_serve

@@ -18,6 +18,10 @@ inside skill folders. Run installers from the prepared working directory.
 /path/to/hetzner-hermes-claw-box/scripts/setup-agent-box.sh --project-dir "$PWD"
 ```
 
+The canonical skill checkout uses `scripts/setup-agent-box.sh`. A working-repo
+bundle uses `.agents/skills/hetzner-agent-box/scripts/setup-agent-box.sh`; both
+entrypoints prepare the same files and flow.
+
 The first question is Hermes or OpenClaw; then server type and location (`cx23`
 recommended; any type may be entered; validated against Hetzner before writing anything).
 
@@ -38,9 +42,15 @@ Tailscale prints a browser URL, open it and approve the VPS before continuing.
 
 ```bash
 ./agent-box-manage.sh register --runtime hermes
-# Or: ./agent-box-manage.sh register --runtime openclaw
+# Or: ./agent-box-manage.sh register --runtime openclaw --agent AGENT_ID --group main
 ./agent-box-manage.sh status
 ```
+
+OpenClaw's initial agent ID and optional label are collected during setup. If the
+optional GitHub question was answered yes, run
+`./agent-box-manage.sh github-bootstrap --box NAME` after registration; see
+[GitHub bootstrap](references/github-bootstrap.md). Existing workspace or sandbox
+recovery is explicit; see [workspace recovery](references/workspace-recovery.md).
 
 ## Local state
 
@@ -86,5 +96,5 @@ bash -n scripts/agent-box-manage.sh
 
 Tests use local stubs for API/SSH/provisioning; they never create a paid server.
 Never commit `.env`, `credentials.txt`, `boxes.json`, or their backups. See
-[SKILL.md](SKILL.md) for the full agent procedure and
-[references/troubleshooting.md](references/troubleshooting.md) for the rest.
+[SKILL.md](SKILL.md) for the authoritative procedure and
+[references/troubleshooting.md](references/troubleshooting.md) for focused links.

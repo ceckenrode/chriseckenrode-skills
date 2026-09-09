@@ -9,7 +9,9 @@ allowed-tools: Bash, Read, Write, Edit
 Standalone Hetzner/VPS provisioning and management for Hermes (Docker groups) and
 OpenClaw (Incus groups and agents). Renamed from `setup-hermes-env`. The four root
 provisioning filenames and existing remote paths remain stable. This skill does
-not install AgentBox core.
+not install AgentBox core. Fresh OpenClaw agents use host-authoritative workspaces
+with sandbox mode off; retained Incus infrastructure remains available for
+existing or explicitly selected sandbox policies.
 
 ## Choose the flow
 
@@ -30,9 +32,11 @@ operations. Never print secret files into chat or commit live configuration.
    /path/to/hetzner-agent-box/scripts/setup-agent-box.sh --project-dir "$PWD"
    ```
 
-   In this checkout, the entrypoint is
-   `.agents/skills/hetzner-agent-box/scripts/setup-agent-box.sh`. The helper asks
-   runtime first, then confirms any existing-file replacements, presents the
+   In a working-repo bundle, the entrypoint is
+   `.agents/skills/hetzner-agent-box/scripts/setup-agent-box.sh`; in the canonical
+   skill checkout, use `scripts/setup-agent-box.sh`. The helper asks runtime first,
+   then, for OpenClaw, requires an initial agent ID matching the managed-ID rules
+   and accepts an optional label (defaulting to the ID). It confirms existing-file replacements, presents the
    server choices, validates the Hetzner token, and collects runtime credentials.
    It prepares files only; it does not provision a paid box.
 
@@ -125,7 +129,28 @@ operations. Never print secret files into chat or commit live configuration.
    coincide for operational purposes. All metadata can also be passed as flags
    (see `--help`). The helper never parses or saves an installer transcript.
 
-9. Put the one-time root password only in local `credentials.txt` if saving it.
+9. A fresh OpenClaw install records the selected ID as the named default agent in
+   the `main` group, with workspace `/home/openclaw/workspace-<id>` and matching
+   `agentDir`; `main` is the group, not a silently chosen agent. Fresh sandbox
+   mode is `off`, so the host and gateway use the same recorded workspace. The
+   installer seeds git/gh approvals once through the supported OpenClaw CLI and
+   scopes the host-action wrapper to the initial agent. Existing boxes preserve
+   their recorded paths, effective sandbox policy, and approvals: refresh does
+   not silently rename or merge workspaces, switch sandbox mode, recreate
+   sandboxes, or reseed approvals.
+
+10. If setup asked for optional GitHub bootstrap, run this only after install and
+    registration succeed:
+
+    ```bash
+    ./agent-box-manage.sh github-bootstrap --box NAME
+    ```
+
+    It is interactive and opt-in on each run. The first prompt offers to copy an
+    existing local GitHub CLI credential (default no); an unavailable or declined
+    credential falls back to manual entry. See [GitHub bootstrap](references/github-bootstrap.md).
+
+11. Put the one-time root password only in local `credentials.txt` if saving it.
    Never put passwords, tokens, or the full installer output in `boxes.json`.
    Both installers print the root password once; adding groups/agents does not
    generate another root password. Keep separate credentials handoff files per
@@ -175,7 +200,7 @@ Older pre-group installs must migrate default first: upload the current
 The VPS moves legacy `/var/lib/hermes-vps/hermes-home` into `groups/default/` and
 recreates `hermes-agent-default`. Do not trigger migration with add-group.
 
-### OpenClaw
+### OpenClaw management
 
 `add-group` and `add-agent` dispatch through `./openclaw-hetzner.sh` with the saved
 host/key and supplied group/agent. Other lifecycle commands, including `list`,
@@ -184,6 +209,18 @@ act on the whole box: the manager rejects `--group` rather than silently ignorin
 it. Add-agent requires a **new bot token** remotely, unlike the optional bot in
 first setup; an empty allow-from uses pairing. If the group is missing, the VPS
 asks whether to create it.
+
+Existing agents retain their recorded workspace and effective sandbox policy. A
+new agent on a mixed-policy legacy box requires an explicit sandbox policy; an
+unambiguous existing policy may be inherited. Sandbox off is host-authoritative,
+not file isolation: the shared service account can access the host workspace and
+retains its configured privileged host actions. Incus groups, containers, and
+packages remain installed infrastructure even when an agent runs on the host.
+
+GitHub setup is box-wide and takes no token, agent, or group argument. Per-repository
+deploy-key registration is a separate future explicit operator action; installation
+and bootstrap never perform it. See [workspace recovery](references/workspace-recovery.md)
+before reconciling old workspace or policy state.
 
 OpenClaw `agents.json` supports these optional per-agent fields: `subagents` (an
 object with `model`, `thinking`, and `delegationMode`), `skills` (an array that is
@@ -232,8 +269,11 @@ See [boxes.example.json](boxes.example.json) for schema version 1: `boxes` conta
 `name`, `runtime`, string `server_id`, `server_type`, `location`, `public_ip`,
 `tailscale_ip`, absolute `ssh_key_path`, `groups`, `agents` (`{id, group}`),
 `paths` (`vps_script`, `state_dir`), and `created_at` UTC timestamp. Hermes starts
-with `groups: ["default"]`, `agents: []`; OpenClaw starts with `main` group and
-`main` agent. Remote paths are `/root/<runtime>-vps.sh` and `/var/lib/<runtime>-vps`.
+with `groups: ["default"]`, `agents: []`; OpenClaw starts with the selected named
+agent in the `main` group. Its remote record includes `default`, `label`,
+`workspace`, `agentDir`, and explicit `sandbox` policy. A fresh default workspace
+is `/home/openclaw/workspace-<id>`; an existing record's validated `workspace` is
+authoritative. Remote paths are `/root/<runtime>-vps.sh` and `/var/lib/<runtime>-vps`.
 
 The state file is local-only, mode 600, schema-validated and written atomically.
 Registration appends; duplicate names/server IDs are rejected. Additions update
@@ -241,7 +281,9 @@ state only on a successful remote exit, under a local writer lock. The VPS is
 still authoritative: after dropped connections, external changes, or registering
 an older box, inspect live status/list and reconcile **only the schema's metadata**
 in the local JSON; do not copy remote agents.json or secrets wholesale. Maintain
-mode 600. No automatic remote inventory import is performed.
+mode 600. Legacy boxes remain unchanged until an operator explicitly migrates
+them. No automatic remote inventory import, workspace rename/merge, duplicate
+deletion, or sandbox switch is performed.
 
 `lockdown` uses `ssh -tt` to the selected VPS script for both runtimes so the typed
 `LOCKDOWN` prompt stays interactive. All remote operations preserve stdin;
@@ -249,13 +291,20 @@ confirmations are never answered by the manager. `logs` follows until interrupte
 Do not run destructive operations without the user's authorization or bypass their
 confirmation. This helper provides no delete/restart/arbitrary-shell command.
 
-## Verification and fallback
+## Verification
 
-Use `bash -n` on changed scripts and `python3 -m unittest discover -s tests -v` in
-this repository. The tests stub curl/SSH/provisioning and never create servers.
-ShellCheck is preferred when installed. Live install acceptance requires the
-actual paid-server confirmation, Tailscale approval, completed handoff and remote
-status; offline tests do not establish deployment success.
+Use `python3 -m json.tool boxes.example.json`,
+`python3 -B -m unittest discover -s tests -v`, and
+`BOXSKILL_TEST_BASH=/bin/bash /bin/bash tests/test_offline_bash.sh`. The shell gate
+checks the distributed scripts; tests stub curl/SSH/provisioning and never create
+servers. ShellCheck is preferred when installed. These are offline checks only:
+live acceptance additionally requires paid-server confirmation, Tailscale approval,
+the completed handoff, remote status, and any chosen future GitHub/repository checks.
+
+For explicit recovery, approval re-scoping, or repository deploy-key registration,
+follow [workspace recovery](references/workspace-recovery.md) and
+[GitHub bootstrap](references/github-bootstrap.md). No recovery or deploy-key
+action is automatic.
 
 If a remote prompt still hangs after the wrapper has fed its spare newline input,
 use TIOCSTI pty injection from a trusted interactive session to inject the needed

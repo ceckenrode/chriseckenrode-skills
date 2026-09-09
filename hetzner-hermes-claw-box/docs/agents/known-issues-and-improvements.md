@@ -6,6 +6,32 @@ parity debugging). Provider- and model-agnostic: substitute whatever agent runti
 and model provider you use. Each item lists status and the fix it needs. No secrets
 in this file, ever.
 
+## Disposition — September 8–9 environment failures
+
+The following incident class is addressed by the current environment-contract
+work. These are dispositions, not claims of live deployment verification:
+
+- **Silent `main` agent:** fresh OpenClaw setup now requires
+  `OPENCLAW_INITIAL_AGENT_ID` and records the selected named agent while retaining
+  `main` as the group identifier.
+- **Workspace drift:** new records use the matching
+  `/home/openclaw/workspace-<id>` path, while existing recorded paths remain
+  authoritative until an explicit recovery procedure is carried out.
+- **Sandbox-mode drift:** fresh installs use host-authoritative sandbox off;
+  existing effective policies are preserved and refresh does not recreate or
+  switch sandboxes.
+- **Unusable git/gh:** fresh approvals are seeded through the supported CLI for
+  the installed executable paths, with fail-closed behavior and no broad project
+  wildcard grants.
+- **No GitHub bootstrap:** OpenClaw setup can opt in to the interactive,
+  box-wide `github-bootstrap` command. Credential copying is prompted per run and
+  defaults to no; deploy-key registration remains a future explicit operator action.
+
+Use [GitHub bootstrap](../../references/github-bootstrap.md) and
+[workspace recovery](../../references/workspace-recovery.md) for the focused
+operator procedures. The d9750ff-era items below remain existing regression
+guards; they are not reclassified as new work here.
+
 ## Fixed on 2026-09-06 (keep as regression guard)
 
 - **`TAILSCALE_AUTH_KEY` was never forwarded to the box** — headless install

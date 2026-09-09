@@ -14,6 +14,9 @@ MODEL_PROVIDER="${MODEL_PROVIDER:-}"
 MODEL_BASE_URL="${MODEL_BASE_URL:-}"
 MODEL_API_KEY="${MODEL_API_KEY:-}"
 MODEL_ID="${MODEL_ID:-}"
+OPENCLAW_GITHUB_BOOTSTRAP=0
+OPENCLAW_INITIAL_AGENT_ID="${OPENCLAW_INITIAL_AGENT_ID:-}"
+OPENCLAW_INITIAL_AGENT_LABEL="${OPENCLAW_INITIAL_AGENT_LABEL:-}"
 cleanup() {
   for temp_file in "$TEMP_FILE" "$SERVER_TYPES_FILE" "$AUTH_HEADER_FILE"; do
     [[ -z "$temp_file" ]] || rm -f -- "$temp_file"
@@ -36,6 +39,9 @@ Renamed from setup-hermes-env.
 USAGE
 }
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+validate_openclaw_agent_id() {
+  [[ "$1" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || fail "Invalid OpenClaw initial agent ID: $1"
+}
 while (($#)); do
   case "$1" in
     -h|--help) usage; exit 0 ;;
@@ -154,6 +160,8 @@ EXAMPLE
 TELEGRAM_BOT_TOKEN=""
 TELEGRAM_ALLOW_FROM=""
 OPENCLAW_SSH_KEY_PASSPHRASE="your-ssh-key-passphrase"
+OPENCLAW_INITIAL_AGENT_ID="dorian"
+OPENCLAW_INITIAL_AGENT_LABEL="Dorian"
 EXAMPLE
     fi
   } > "$TEMP_FILE"
@@ -168,6 +176,11 @@ write_env_values() {
   env_line MODEL_BASE_URL "$MODEL_BASE_URL"
   env_line MODEL_API_KEY "$MODEL_API_KEY"
   env_line MODEL_ID "$MODEL_ID"
+  if [[ "$RUNTIME" == openclaw ]]; then
+    env_line OPENCLAW_GITHUB_BOOTSTRAP "$OPENCLAW_GITHUB_BOOTSTRAP"
+    env_line OPENCLAW_INITIAL_AGENT_ID "$OPENCLAW_INITIAL_AGENT_ID"
+    env_line OPENCLAW_INITIAL_AGENT_LABEL "$OPENCLAW_INITIAL_AGENT_LABEL"
+  fi
   env_line TELEGRAM_BOT_TOKEN "$BOT_TOKEN"
   env_line TELEGRAM_ALLOW_FROM "$ALLOW_FROM"
   env_line SSH_PUBLIC_KEY_PATH "$KEY_PATH.pub"
@@ -188,6 +201,16 @@ while :; do
     *) printf 'Choose Hermes or OpenClaw.\n' >&2 ;;
   esac
 done
+if [[ "$RUNTIME" == openclaw ]]; then
+  ask 'Initial OpenClaw agent ID' required no "$OPENCLAW_INITIAL_AGENT_ID"
+  OPENCLAW_INITIAL_AGENT_ID="$REPLY"
+  validate_openclaw_agent_id "$OPENCLAW_INITIAL_AGENT_ID"
+  ask 'Initial OpenClaw agent label' optional no "${OPENCLAW_INITIAL_AGENT_LABEL:-$OPENCLAW_INITIAL_AGENT_ID}"
+  OPENCLAW_INITIAL_AGENT_LABEL="${REPLY:-$OPENCLAW_INITIAL_AGENT_ID}"
+  if yes_no "Set up GitHub after install and registration? (optional; no token needed here)"; then
+    OPENCLAW_GITHUB_BOOTSTRAP=1
+  fi
+fi
 [[ -d "$PROJECT_DIR" ]] || fail "Project directory does not exist: $PROJECT_DIR"
 PROJECT_DIR="$(cd -- "$PROJECT_DIR" && pwd -P)"
 output_path "${ENV_FILE:-.env}"; ENV_FILE="$REPLY"
@@ -341,7 +364,20 @@ begin_file "$CREDENTIALS_FILE"
   printf './%s-hetzner.sh install\n' "$RUNTIME"
   printf '# Type CREATE at the paid-server prompt. Complete any Tailscale browser login.\n'
   printf '\n[VPS handoff - fill only after successful install]\nServer ID=\nServer name=\nPublic IP=\nTailscale IP=\nRoot password=\nSSH command=\n'
-  printf '\n[Record non-secret metadata after successful install]\n./agent-box-manage.sh register --runtime %s\n' "$RUNTIME"
+  printf '\n[Record non-secret metadata after successful install]\n'
+  if [[ "$RUNTIME" == openclaw ]]; then
+    printf 'Initial agent ID: %s\nInitial agent workspace: /home/openclaw/workspace-%s\n' \
+      "$OPENCLAW_INITIAL_AGENT_ID" "$OPENCLAW_INITIAL_AGENT_ID"
+    printf './agent-box-manage.sh register --runtime openclaw --agent %q --group main\n' \
+      "$OPENCLAW_INITIAL_AGENT_ID"
+  else
+    printf './agent-box-manage.sh register --runtime %s\n' "$RUNTIME"
+  fi
+  if [[ "$OPENCLAW_GITHUB_BOOTSTRAP" == 1 ]]; then
+    printf '\n[Optional GitHub - after install and registration succeed]\n'
+    printf './agent-box-manage.sh github-bootstrap --box NAME\n'
+    printf '# Replace NAME with the registered box name; enter GitHub credentials only in its remote terminal.\n'
+  fi
 } > "$TEMP_FILE"
 finish_file "$CREDENTIALS_FILE" 600
 bash -n "$ENV_FILE"
@@ -349,4 +385,15 @@ bash -n "$ENV_EXAMPLE_FILE"
 printf 'Created .env and credentials handoff with mode 600; safe example written.\n'
 printf 'Next: cd %q\nset -a && source %q && set +a\n./%s-hetzner.sh install\n' "$PROJECT_DIR" "$ENV_FILE" "$RUNTIME"
 printf 'Type CREATE yourself. Pause for the Tailscale browser login URL if shown.\n'
-printf 'After install succeeds: ./agent-box-manage.sh register --runtime %s\n' "$RUNTIME"
+if [[ "$RUNTIME" == openclaw ]]; then
+  printf 'Initial OpenClaw agent: %s\n' "$OPENCLAW_INITIAL_AGENT_ID"
+  printf 'Initial agent workspace: /home/openclaw/workspace-%s\n' "$OPENCLAW_INITIAL_AGENT_ID"
+  printf 'After install succeeds: ./agent-box-manage.sh register --runtime openclaw --agent %q --group main\n' \
+    "$OPENCLAW_INITIAL_AGENT_ID"
+else
+  printf 'After install succeeds: ./agent-box-manage.sh register --runtime %s\n' "$RUNTIME"
+fi
+if [[ "$OPENCLAW_GITHUB_BOOTSTRAP" == 1 ]]; then
+  printf 'After install and registration succeed: ./agent-box-manage.sh github-bootstrap --box NAME\n'
+  printf 'Replace NAME with the registered box name; credentials are entered only in the remote terminal.\n'
+fi

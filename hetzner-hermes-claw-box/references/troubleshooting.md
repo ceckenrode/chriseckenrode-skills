@@ -4,6 +4,10 @@ Rarely needed procedures for the Hetzner Hermes / Claw Box skill. Start with
 [known issues](../docs/agents/known-issues-and-improvements.md) for causes seen
 in live deployments.
 
+For the optional OpenClaw GitHub flow, use [GitHub bootstrap](github-bootstrap.md).
+For recorded workspace or legacy sandbox reconciliation, use [workspace recovery](workspace-recovery.md).
+Both are explicit operator procedures; neither implies automatic migration or deletion.
+
 ## Unattended install
 
 Only when the user explicitly requires automation. Non-interactive stdin order:

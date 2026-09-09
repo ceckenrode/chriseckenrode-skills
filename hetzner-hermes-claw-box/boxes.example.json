@@ -34,7 +34,7 @@
       ],
       "agents": [
         {
-          "id": "main",
+          "id": "agent-example",
           "group": "main"
         }
       ],

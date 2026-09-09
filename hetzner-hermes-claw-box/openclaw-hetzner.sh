@@ -6,7 +6,7 @@ HETZNER_SERVER_TYPE="${HETZNER_SERVER_TYPE:-cx23}"
 HETZNER_IMAGE="${HETZNER_IMAGE:-ubuntu-24.04}"
 HETZNER_SERVER_NAME="${HETZNER_SERVER_NAME:-openclaw-$(date +%Y%m%d-%H%M%S)}"
 HETZNER_API_BASE="https://api.hetzner.cloud/v1"
-OPENCLAW_VPS_URL="${OPENCLAW_VPS_URL:-https://raw.githubusercontent.com/ceckenrode/agent-box/main/openclaw-vps.sh}"
+OPENCLAW_VPS_URL="${OPENCLAW_VPS_URL:-https://raw.githubusercontent.com/ceckenrode/chriseckenrode-skills/main/hetzner-hermes-claw-box/scripts/openclaw-vps.sh}"
 OPENCLAW_TIMEZONE="${OPENCLAW_TIMEZONE:-}"
 
 COMMAND="install"
@@ -18,6 +18,8 @@ CREDENTIALS_FILE="${CREDENTIALS_FILE:-}"
 REMOTE_HOST=""
 GROUP_ID=""
 AGENT_ID=""
+OPENCLAW_INITIAL_AGENT_ID="${OPENCLAW_INITIAL_AGENT_ID:-}"
+OPENCLAW_INITIAL_AGENT_LABEL="${OPENCLAW_INITIAL_AGENT_LABEL:-}"
 HETZNER_API_TOKEN="${HETZNER_API_TOKEN:-}"
 MODEL_PROVIDER="${MODEL_PROVIDER:-}"
 MODEL_BASE_URL="${MODEL_BASE_URL:-}"
@@ -82,6 +84,10 @@ Environment overrides:
   HETZNER_SERVER_NAME    Default: openclaw-YYYYMMDD-HHMMSS.
   OPENCLAW_VPS_URL       Remote VPS installer URL.
   OPENCLAW_TIMEZONE      IANA timezone. Default: your local machine's current timezone, then UTC.
+  OPENCLAW_INITIAL_AGENT_ID
+                         Required lowercase ID for the initial OpenClaw agent.
+  OPENCLAW_INITIAL_AGENT_LABEL
+                         Optional display label for the initial agent; defaults to its ID.
 USAGE
 }
 
@@ -155,6 +161,13 @@ prompt_required_value() {
 
 shell_quote() {
   printf '%q' "$1"
+}
+
+validate_initial_agent_identity() {
+  [[ -n "$OPENCLAW_INITIAL_AGENT_ID" ]] || fail 'OPENCLAW_INITIAL_AGENT_ID is required for OpenClaw install'
+  [[ "$OPENCLAW_INITIAL_AGENT_ID" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || \
+    fail "invalid OpenClaw initial agent ID: $OPENCLAW_INITIAL_AGENT_ID"
+  OPENCLAW_INITIAL_AGENT_LABEL="${OPENCLAW_INITIAL_AGENT_LABEL:-$OPENCLAW_INITIAL_AGENT_ID}"
 }
 
 need_command() {
@@ -439,6 +452,8 @@ write_remote_env_file() {
   env_contents+="MODEL_BASE_URL=$(shell_quote "$MODEL_BASE_URL")"$'\n'
   env_contents+="MODEL_API_KEY=$(shell_quote "$MODEL_API_KEY")"$'\n'
   env_contents+="MODEL_ID=$(shell_quote "$MODEL_ID")"$'\n'
+  env_contents+="OPENCLAW_INITIAL_AGENT_ID=$(shell_quote "$OPENCLAW_INITIAL_AGENT_ID")"$'\n'
+  env_contents+="OPENCLAW_INITIAL_AGENT_LABEL=$(shell_quote "$OPENCLAW_INITIAL_AGENT_LABEL")"$'\n'
   if [[ -n "$MODEL_CATALOG" ]]; then
     env_contents+="MODEL_CATALOG=$(shell_quote "$MODEL_CATALOG")"$'\n'
   fi
@@ -553,6 +568,10 @@ print_summary() {
   printf '  Public IP:   %s\n' "$CREATED_SERVER_IP"
   printf '  Tailscale IP:%s\n' " ${CREATED_SERVER_TAILSCALE_IP}"
   printf '  Timezone:    %s\n' "$OPENCLAW_TIMEZONE"
+  printf '  Initial agent: %s\n' "$OPENCLAW_INITIAL_AGENT_ID"
+  printf '  Initial agent workspace: /home/openclaw/workspace-%s\n' "$OPENCLAW_INITIAL_AGENT_ID"
+  printf '  Registration: ./agent-box-manage.sh register --runtime openclaw --agent %q --group main\n' \
+    "$OPENCLAW_INITIAL_AGENT_ID"
   printf '\nRoot password (printed once; not saved by this script):\n'
   printf '  %s\n' "$ROOT_PASSWORD"
   printf '\nSSH via Tailscale:\n'
@@ -567,6 +586,7 @@ print_summary() {
 }
 
 cmd_preflight() {
+  validate_initial_agent_identity
   local failures=0 pub_path priv_path available response cmd
   for cmd in curl ssh ssh-add ssh-keygen jq; do
     if command -v "$cmd" >/dev/null 2>&1; then
@@ -634,6 +654,7 @@ cmd_preflight() {
 }
 
 run_install() {
+  validate_initial_agent_identity
   collect_inputs
   choose_or_create_ssh_key
   cmd_preflight

@@ -7,6 +7,7 @@ STATE_FILE=""
 BOX=""; RUNTIME=""; GROUP=""; AGENT=""
 SERVER_ID=""; SERVER_TYPE=""; LOCATION=""; PUBLIC_IP=""; TAILSCALE_IP=""; SSH_KEY=""; CREATED_AT=""
 TEMP_FILE=""; LOCK_DIR=""
+GITHUB_IMPORT_ID=""; GITHUB_IMPORT_REMOTE=""
 usage() {
   cat <<'USAGE'
 Usage: agent-box-manage.sh COMMAND [--project-dir DIR] [--state FILE] [--box NAME]
@@ -15,6 +16,7 @@ Commands:
   boxes          List the local inventory (no network).
   register       Record a successfully installed box; prompts for missing metadata.
   status, doctor, logs, backup, maintenance, refresh-config, lockdown
+  github-bootstrap                      OpenClaw only; interactive shared-account GitHub setup.
   serve, serve-off                       OpenClaw only; expose or disable the dashboard over Tailscale.
   add-group --group NAME
   add-agent --agent ID --group NAME     OpenClaw only.
@@ -31,8 +33,9 @@ PROJECT_DIR/boxes.json. Requires jq and SSH; wrappers live in PROJECT_DIR.
 register options (non-secret values only):
   --runtime hermes|openclaw --box NAME --server-id ID --server-type TYPE
   --location LOCATION --public-ip IP --tailscale-ip IP --ssh-key PRIVATE_KEY
+  --agent ID --group NAME (OpenClaw only; group defaults to main)
   --created-at UTC_TIMESTAMP (default: registration time)
-Seeds default Hermes group, or OpenClaw main group + main agent. Existing box
+Seeds default Hermes group, or the selected OpenClaw group + agent. Existing box
 names/server IDs are rejected. For existing inventories, reconcile metadata locally.
 No .env is sourced automatically. SSH prompts for passphrases when needed.
 Confirmations remain interactive; no --yes or arbitrary remote commands accepted.
@@ -40,6 +43,12 @@ USAGE
 }
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 cleanup() {
+  if [[ -n "$GITHUB_IMPORT_ID" ]]; then
+    # Best-effort removal of only this invocation's staging file, including when
+    # SSH failed after transferring it. Never read terminal input for cleanup.
+    ssh -nT -o BatchMode=yes -o ConnectTimeout=5 -o IdentitiesOnly=yes -i "$SSH_KEY" \
+      "root@$HOST" "$GITHUB_IMPORT_REMOTE" >/dev/null 2>&1 || true
+  fi
   [[ -z "$TEMP_FILE" ]] || rm -f -- "$TEMP_FILE"
   [[ -z "$LOCK_DIR" ]] || rmdir -- "$LOCK_DIR"
 }
@@ -68,7 +77,7 @@ while (($#)); do
   shift 2
 done
 case "$COMMAND" in
-  boxes|register|status|doctor|logs|backup|maintenance|refresh-config|lockdown|serve|serve-off|add-group|add-agent|list) ;;
+  boxes|register|status|doctor|logs|backup|maintenance|refresh-config|lockdown|serve|serve-off|github-bootstrap|add-group|add-agent|list) ;;
   *) fail "Unsupported command: $COMMAND" ;;
 esac
 command -v jq >/dev/null || fail 'jq is required; install it with your system package manager'
@@ -171,9 +180,16 @@ else
   STATE='{"version":1,"boxes":[]}'
 fi
 if [[ "$COMMAND" == register ]]; then
-  [[ -z "$GROUP$AGENT" ]] || fail 'Register seeds initial groups/agents; reconcile existing inventories separately'
   prompt_field RUNTIME 'Agent runtime: hermes or openclaw'
   case "$RUNTIME" in hermes|openclaw) ;; *) fail 'Runtime must be hermes or openclaw' ;; esac
+  if [[ "$RUNTIME" == openclaw ]]; then
+    GROUP="${GROUP:-main}"
+    prompt_field AGENT 'Installed OpenClaw agent ID'
+    [[ "$AGENT" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || fail 'Invalid agent ID'
+    [[ "$GROUP" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || fail 'Invalid OpenClaw group ID'
+  else
+    [[ -z "$GROUP$AGENT" ]] || fail 'OpenClaw --agent/--group options are not valid for Hermes registration'
+  fi
   prompt_field BOX 'Installed server name (local box name)'
   prompt_field SERVER_ID 'Hetzner server ID from successful install'
   prompt_field SERVER_TYPE 'Installed server type' "${HETZNER_SERVER_TYPE:-cx23}"
@@ -188,16 +204,17 @@ if [[ "$COMMAND" == register ]]; then
   jq -e --arg name "$BOX" --arg id "$SERVER_ID" '.boxes | all(.[]; .name != $name and .server_id != $id)' <<< "$STATE" >/dev/null || fail 'Box name or server ID already registered; existing state preserved'
   STATE="$(jq --arg name "$BOX" --arg runtime "$RUNTIME" --arg id "$SERVER_ID" \
     --arg type "$SERVER_TYPE" --arg location "$LOCATION" --arg public "$PUBLIC_IP" \
-    --arg ts "$TAILSCALE_IP" --arg key "$SSH_KEY" --arg created "$CREATED_AT" '
+    --arg ts "$TAILSCALE_IP" --arg key "$SSH_KEY" --arg created "$CREATED_AT" \
+    --arg group "$GROUP" --arg agent "$AGENT" '
     .boxes += [{name:$name, runtime:$runtime, server_id:$id, server_type:$type,
       location:$location, public_ip:$public, tailscale_ip:$ts, ssh_key_path:$key,
-      groups:(if $runtime == "hermes" then ["default"] else ["main"] end),
-      agents:(if $runtime == "hermes" then [] else [{id:"main",group:"main"}] end),
+      groups:(if $runtime == "hermes" then ["default"] else [$group] end),
+      agents:(if $runtime == "hermes" then [] else [{id:$agent,group:$group}] end),
       paths:{vps_script:("/root/"+$runtime+"-vps.sh"),state_dir:("/var/lib/"+$runtime+"-vps")},
       created_at:$created}]
   ' <<< "$STATE")"
   write_state
-  printf 'Registered %s in %s (mode 600).\n' "$BOX" "$STATE_FILE"
+  printf 'Registered %s in %s (mode 600; agent %s, group %s).\n' "$BOX" "$STATE_FILE" "${AGENT:-none}" "${GROUP:-default}"
   exit 0
 fi
 [[ -z "$RUNTIME$SERVER_ID$SERVER_TYPE$LOCATION$PUBLIC_IP$TAILSCALE_IP$SSH_KEY$CREATED_AT" ]] || fail 'Registration options only apply to register'
@@ -222,12 +239,13 @@ else
   [[ -z "$GROUP" || "$GROUP" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || fail 'Invalid OpenClaw group ID'
 fi
 [[ -z "$AGENT" || "$AGENT" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || fail 'Invalid agent ID'
-[[ "$COMMAND" == add-agent || -z "$AGENT" || "$COMMAND" == serve || "$COMMAND" == serve-off ]] || fail '--agent only applies to add-agent'
+[[ "$COMMAND" == add-agent || -z "$AGENT" || "$COMMAND" == serve || "$COMMAND" == serve-off || "$COMMAND" == github-bootstrap ]] || fail '--agent only applies to add-agent'
 case "$COMMAND" in
   add-group) [[ -n "$GROUP" ]] || fail 'add-group requires --group' ;;
   add-agent) [[ "$RUNTIME" == openclaw && -n "$GROUP" && -n "$AGENT" ]] || fail 'add-agent requires OpenClaw, --group and --agent' ;;
   list) [[ "$RUNTIME" == openclaw && -z "$GROUP" ]] || fail 'list is an OpenClaw box-wide command' ;;
   lockdown) [[ -z "$GROUP" ]] || fail 'lockdown applies to the whole box' ;;
+  github-bootstrap) [[ "$RUNTIME" == openclaw ]] || fail 'github-bootstrap requires an OpenClaw box'; [[ -z "$GROUP$AGENT" ]] || fail 'github-bootstrap is box-wide; omit --group and --agent' ;;
   serve|serve-off) [[ "$RUNTIME" == openclaw ]] || fail 'serve commands require an OpenClaw box'; [[ -z "$GROUP$AGENT" ]] || fail 'serve commands are box-wide; omit --group and --agent' ;;
 esac
 if [[ "$RUNTIME" == openclaw && "$COMMAND" != add-group && "$COMMAND" != add-agent && -n "$GROUP" ]]; then
@@ -244,7 +262,42 @@ if [[ "$COMMAND" == add-group || "$COMMAND" == add-agent || ( "$RUNTIME" == herm
   "$WRAPPER" "${args[@]}"
 else
   # Fixed command allowlist + validated paths; no user-supplied remote shell snippets.
+  if [[ "$COMMAND" == github-bootstrap ]]; then
+    set +x
+    printf 'Box %s (%s): Copy local GitHub credentials to this box? [y/N]: ' "$BOX" "$HOST" >&2
+    answer=''
+    IFS= read -r answer || answer=''
+    case "$answer" in
+      y|Y|yes)
+        TEMP_FILE="$(mktemp "${TMPDIR:-/tmp}/agent-box-github.XXXXXX")"
+        chmod 600 "$TEMP_FILE"
+        local_gh="$(command -v gh || true)"
+        # No .env or login shell. Capture token output privately, never in a shell
+        # variable/argv. Ignore inherited overrides and debug/proxy credentials.
+        if [[ -n "$local_gh" ]] &&
+           env -i HOME="$HOME" PATH="$PATH" "$local_gh" auth token --hostname github.com >"$TEMP_FILE" 2>/dev/null &&
+           LC_ALL=C grep -q '[^[:space:]]' "$TEMP_FILE" &&
+           env -i HOME="$HOME" PATH="$PATH" "$local_gh" api --hostname github.com user --jq .login 2>/dev/null |
+             python3 -c 'import re, sys; sys.exit(0 if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", sys.stdin.read().strip()) else 1)' >/dev/null 2>&1; then
+          GITHUB_IMPORT_ID="${TEMP_FILE##*.}"
+          [[ "$GITHUB_IMPORT_ID" =~ ^[A-Za-z0-9]{6,64}$ ]] || fail 'Invalid private transfer identifier'
+          printf -v GITHUB_IMPORT_REMOTE '%q github-token-discard %q' "$VPS_SCRIPT" "$GITHUB_IMPORT_ID"
+          printf -v import_remote '%q github-token-stage %q' "$VPS_SCRIPT" "$GITHUB_IMPORT_ID"
+          cat "$TEMP_FILE" | ssh -T -o IdentitiesOnly=yes -i "$SSH_KEY" "root@$HOST" "$import_remote" \
+            >/dev/null 2>&1 || fail 'GitHub credential transfer failed; retry github-bootstrap'
+        else
+          printf 'No working local gh credential found; using manual entry on the box.\n' >&2
+        fi
+        rm -f "$TEMP_FILE"
+        TEMP_FILE=''
+        ;;
+    esac
+  fi
   printf -v remote '%q %q' "$VPS_SCRIPT" "$COMMAND"
+  if [[ -n "$GITHUB_IMPORT_ID" ]]; then
+    printf -v remote '%s --import-id %q' "$remote" "$GITHUB_IMPORT_ID"
+  fi
+  # The final bootstrap always keeps the operator's terminal attached directly.
   ssh -tt -o IdentitiesOnly=yes -i "$SSH_KEY" "root@$HOST" "$remote"
 fi
 # Commit local additions only after a successful remote exit. The VPS remains
