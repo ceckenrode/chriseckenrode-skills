@@ -1,6 +1,6 @@
 ---
 name: use-codex
-description: Dispatch workers through Codex CLI when a Codex/OpenAI model is requested without native subagent support, or when Codex is explicitly selected as the CLI backend.
+description: Dispatch via Codex CLI when the host's native subagent tool cannot provide a user-requested model, or the user explicitly selects Codex.
 ---
 
 # Use Codex

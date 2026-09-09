@@ -1,6 +1,6 @@
 ---
 name: use-claude
-description: Dispatch workers through Claude Code CLI when a Claude model is requested without native subagent support, or when Claude Code is explicitly selected as the CLI backend.
+description: Dispatch via Claude Code CLI when the host's native subagent tool cannot provide a user-requested model, or the user explicitly selects Claude Code.
 ---
 
 # Use Claude

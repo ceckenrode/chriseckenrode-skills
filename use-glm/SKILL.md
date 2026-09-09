@@ -1,6 +1,6 @@
 ---
 name: use-glm
-description: Dispatch GLM workers through OpenCode when a GLM model is requested without native subagent support, or when OpenCode is explicitly selected as the CLI backend.
+description: Dispatch via OpenCode when the host's native subagent tool cannot provide a user-requested GLM model, or the user explicitly selects OpenCode.
 ---
 
 # Use GLM
