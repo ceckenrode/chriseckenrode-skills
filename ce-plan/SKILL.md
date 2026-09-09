@@ -52,24 +52,33 @@ implementation or offer a separate execution workflow after authoring the plan.
 
 ## Design phases and tasks
 
-Start with the smallest useful end-to-end increment. Establish shared
-interfaces before consumers. Organize work into sequential phases unless
-independent tasks truly have disjoint writes and resources. State prerequisites,
-gate conditions, protected paths, and safe parallel groups explicitly; check
-for cycles and missing prerequisites.
+Start with the smallest useful end-to-end increment. Split independent work
+into parallelizable chunks wherever write sets, resources, and shared contracts
+genuinely allow: parallelism is the goal whenever it is safe, not an exception
+that needs justifying. Establish shared interfaces, types, schemas, and
+migrations as their own earlier tasks so their consumers can then run
+concurrently. Keep tasks sequential when they touch the same files, the same
+types, the same migration, or the same core behavior; a shared write is a hard
+serialization, not a risk to weigh. Name each safe parallel group and the exact
+write-set boundary that makes it safe. Phases run in order; inside a phase, fan
+out every group that qualifies. State prerequisites, gate conditions, and
+protected paths explicitly; check for cycles and missing prerequisites.
 
 Every task must be narrow, independently understandable, decision-complete,
-and implementable cold. Repeat essential context in the task itself. Give each
-task exact write ownership, dependencies, concrete implementation steps,
-required validation, and observable done criteria. Each task ends with passing
+and implementable cold. Repeat essential context in the task itself at the
+depth described in "Write for a less capable implementer" below. Give each task
+exact write ownership, dependencies, approach rationale, concrete
+implementation steps carrying the real code or content they write, required
+validation, and observable done criteria. Each task ends with passing
 validation and leaves the repository working. Do not use placeholders such as
 `TBD`, `TODO`, “same as above,” undefined symbols, or “add appropriate tests.”
 
 For behavior changes, keep RED/GREEN/REFACTOR inside the same task boundary:
 write the smallest meaningful regression check, run the exact minimal command
-and observe the intended behavioral failure, distinguish that failure from a
-fixture or tool failure, implement the smallest change, run the same command to
-green, then refactor only while green and rerun the check. No intentionally
+and observe the named expected failure, quoting the error text or failure
+reason so the implementer can tell an intended RED from a fixture, path, or
+tooling failure, implement the smallest change, run the same command to green,
+then refactor only while green and rerun the check. No intentionally
 failing enforced check may cross a task boundary. Documentation, configuration,
 and test-only work use appropriate passing validation without manufacturing a
 RED step. Investigation-only reproduction has a separate passing evidence
@@ -82,6 +91,46 @@ publish commits, or otherwise describe execution mechanics do not belong in
 the generated plan. Generated plans also exclude required companion skill lists,
 agent, model, or backend assignments, participant or reviewer roles, and
 review/fix iteration processes.
+
+## Write for a less capable implementer
+
+Set the detail bar here: a less capable model must be able to implement any
+single task cold, from that task's text alone, making zero design decisions and
+rediscovering no repository facts beyond the context that task states. Every
+guideline below serves that bar.
+
+Give reasoning, not only steps. Each task states why the change takes this
+shape: the approach and the alternative it rules out, the existing pattern,
+interface, or convention it copies, and the specific failure modes to avoid. An
+implementer that understands intent adapts correctly; one that only
+pattern-matches the surface text produces plausible wrong code.
+
+Show code and content instead of describing them. Every code-touching step
+carries a representative block — exact signatures, types, schemas, test bodies,
+config keys, or before/after content — complete enough to adapt directly rather
+than reinvent. Mark a block illustrative when it is a shape to follow and exact
+when it must be written verbatim. Use exact paths, symbols, and command lines
+everywhere. Prose such as "add appropriate error handling," "validate the
+input," or "write tests for the above" is a defect: name the errors, the
+validation rules, and the test cases instead. Include concrete examples of
+expected behavior — real inputs with their exact outputs, including empty,
+boundary, and error cases — wherever behavior could be read more than one way.
+
+Make every task readable cold and out of order. Restate inside the task the
+repository facts and shared-contract details it depends on: the signature or
+schema an earlier task introduces, the current relevant content of a file being
+modified, the convention being followed, the working directory a command needs.
+Never point at another task's body for content; repeat it. "Same as above,"
+"similar to Task N," and symbols defined nowhere in the plan are defects.
+
+State the expected failure observation for every RED step: the exact command,
+the named test, and the error text or failure reason to expect before
+implementing, plus what a different failure means — a setup, path, or fixture
+problem rather than the behavior under test.
+
+None of this detail is execution mechanics. It describes what to build and why;
+it never says who implements a task, with which agent, model, or backend, or
+how the work is coordinated, reviewed, or committed.
 
 ## Required output
 
@@ -115,7 +164,7 @@ Status: SUCCESS — ready to implement.
 <chosen design, important flow/integration points, dependency graph, critical path and initially ready tasks>
 
 #### Parallel Execution Notes
-<sequential phases, safe task groups or none, shared contracts/resources, protected paths, reasons for dependencies>
+<sequential phases; each named safe parallel group with the disjoint write set that makes it safe, or none with the reason; contract-establishing tasks that unlock fan-out; shared resources and protected paths; the exact shared file, type, migration, or behavior forcing each serialized dependency>
 
 ### 5. Phases
 <for each phase: goal, included task IDs, prerequisites, observable working increment, validation gate and parallel safety>
@@ -130,7 +179,9 @@ Touches: `<exact write path>`, `<exact write path>`
 
 **Goal:** <one observable outcome>
 
-**Parallelization:** <sequential or exact safe companion task IDs and resource conditions>
+**Approach:** <why the change takes this shape: the existing pattern, interface, or convention it follows, the alternative ruled out, and the failure modes to avoid>
+
+**Parallelization:** <exact task IDs this may run beside plus the disjoint write sets and resources that make that safe, or sequential naming the exact shared file, type, migration, or behavior that forces serialization>
 
 **Dependencies:** <none or exact prerequisite task IDs and gate releasing this task>
 
@@ -145,8 +196,8 @@ Touches: `<exact write path>`, `<exact write path>`
 - [ ] <exact task validation and passing acceptance requirement>
 
 **Implementation Steps:**
-- [ ] <one concrete action per step; include specific code/content where needed>
-- [ ] <for behavior changes: add specified regression test, run exact minimal command and observe the named expected failure, implement, rerun the same command to green, then refactor while green; each action gets its own checkbox>
+- [ ] <one concrete action per step, carrying the actual code, schema, or content it writes — labeled illustrative or exact — plus the restated repo facts it relies on>
+- [ ] <for behavior changes: add the specified regression test with its body, run the exact minimal command and observe the named expected failure quoting its error text, note that any other failure is a setup problem, implement, rerun the same command to green, then refactor while green; each action gets its own checkbox>
 - [ ] <run the exact final task gate in the specified working directory, with prerequisites/fixtures and expected result>
 
 **Acceptance Criteria:**
@@ -170,6 +221,8 @@ Touches: `<exact write path>`, `<exact write path>`
 - [ ] No task ends with an intentionally failing enforced check.
 - [ ] Targeted and combined-state checks pass; applicable build/typecheck/lint passes.
 - [ ] Documentation reflects changed behavior; no unrelated edits or sensitive/runtime artifacts are included.
+- [ ] Every task is implementable cold: stated approach rationale, real code/content, restated dependencies, and expected RED failure text.
+- [ ] Independent work is parallelized wherever safe, with named groups and disjoint write sets.
 - [ ] Phase/task grammar, unique IDs, dependency order and parallel safety are consistent.
 - [ ] No placeholders, unresolved implementation decisions or execution-process instructions remain.
 
@@ -182,8 +235,12 @@ Touches: `<exact write path>`, `<exact write path>`
 Before returning the plan, confirm that it covers the requested scope and
 exclusions; names concrete interfaces, paths, content, and commands; maps every
 requirement to a task and acceptance check; and resolves all consequential
-choices in a `SUCCESS` plan. Confirm task nesting and unique IDs, passing task
-boundaries, dependency and resource consistency, safe parallelism, and exact
+choices in a `SUCCESS` plan. Confirm that every task carries its approach
+rationale, the real code or content its steps write, the restated context it
+depends on, and the expected failure text for each RED step, so a less capable
+implementer could complete it cold. Confirm task nesting and unique IDs,
+passing task boundaries, dependency and resource consistency, parallel groups
+named with the disjoint write sets that make them safe, and exact
 test-to-requirement mapping. Confirm that no runtime state, secrets, generated
 artifacts, vague steps, unbounded scope, or execution mechanics leaked into the
 plan. Confirm that the ten numbered sections and required phase/task heading

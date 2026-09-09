@@ -2,6 +2,8 @@
 
 Use this skill when you request a detailed written implementation plan. It produces self-contained phases and tasks with concrete dependencies, file changes, and validation criteria so each task can be implemented without inventing missing design decisions.
 
+Tasks are written to a deliberate bar: a less capable model should be able to implement any single task cold, so each one states its approach rationale, shows the real code or content it writes, restates the context it depends on, and names the failure to expect before implementing. Independent work is split into parallel groups wherever write sets and shared contracts allow, with the boundary that makes each group safe stated explicitly.
+
 ## Use
 
 Ask: `Write a detailed written plan for [change].`
