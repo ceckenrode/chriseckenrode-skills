@@ -8,6 +8,7 @@ Hermes or OpenClaw on Hetzner.
 | Skill | Purpose |
 | --- | --- |
 | [workflows](workflows/README.md) | Describe a workflow; the main agent orchestrates and supervises planning, implementation, and optional review across selected models. |
+| [ce-plan](ce-plan/README.md) | Write detailed plans with concrete phases, tasks, dependencies, and validation criteria. |
 | [use-codex](use-codex/SKILL.md) | Dispatch and resume workers through Codex CLI. |
 | [use-claude](use-claude/SKILL.md) | Dispatch and resume workers through Claude Code CLI. |
 | [use-glm](use-glm/SKILL.md) | Dispatch GLM workers through OpenCode. Defaults to zai-coding-plan/glm-5.3. |
