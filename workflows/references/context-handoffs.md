@@ -39,7 +39,7 @@ Each handoff records:
 For reviews, also record the reviewed baseline, reviewer models/IDs, finding
 IDs/dispositions, and remaining rounds. For exploration, record questions,
 explorer models/effort/IDs, report paths, anchored findings, uncertainties or
-searched scope, and the lead's sufficiency decision. Link evidence instead of
+searched scope, and the main agent's sufficiency decision. Link evidence instead of
 copying raw logs.
 
 At stage entry, reconcile the relevant handoff with current artifacts. Include

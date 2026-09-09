@@ -26,7 +26,7 @@ count and keep independent lenses disjoint where practical.
 For plan review, inspect assumptions and design, task dependencies, readiness
 for implementation, and verification gates. Plan fixes update the plan and its
 handoff; they do not edit product code. Findings that require an architectural
-plan correction route to the selected planning owner/worker, while the lead
+plan correction route to the selected planning owner/worker, while the main agent
 steers scope and accepts the corrected plan. Follow the selected plan-reviewer
 and plan-fixer settings, which may differ from code-review settings.
 
@@ -44,7 +44,7 @@ speculative preferences. Check plan conformance, correctness, regressions, speci
 edge cases, and whether verification demonstrates the claimed behavior. Validate
 parent routes, middleware, shared contracts, and test-harness assumptions before
 reporting an apparent omission in a child module. Code that matches a flawed plan
-can still be defective; report the flaw and its impact so the orchestrator can revise
+can still be defective; report the flaw and its impact so the main agent can revise
 the decision. A no-findings report must still state verification limits.
 
 ## Findings and fixes

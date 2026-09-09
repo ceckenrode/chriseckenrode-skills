@@ -16,7 +16,7 @@ review. A later review or review loop requires an explicit user request.
 3. For plan-review findings, limit writes to the plan and handoff artifacts and
    verify that implementation remains gated by the corrected plan. When a
    finding changes architecture, route the correction to the selected planning
-   owner/worker; the lead steers scope and accepts the result. Product-code
+   owner/worker; the main agent steers scope and accepts the result. Product-code
    findings retain their assigned write ownership and off-limits paths.
 
 ## Fix and verify

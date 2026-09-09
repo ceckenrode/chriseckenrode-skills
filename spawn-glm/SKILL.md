@@ -7,7 +7,7 @@ description: Spawn a GLM worker when the user requests a GLM model or GLM subage
 
 Run the user's assignment as an OpenCode CLI worker. This is a backend adapter; it adds no planning stages or review loops.
 
-1. Confirm the project and a bounded assignment. Write a brief containing the objective, context/paths, read or write scope, acceptance criteria, and expected result to a task-specific temporary file. The brief must be self-contained: the OpenCode session cannot see this conversation. When the `conductor` skill is installed, use the brief structure in its `references/agent-dispatch.md`.
+1. Confirm the project and a bounded assignment. Write a brief containing the objective, context/paths, read or write scope, acceptance criteria, and expected result to a task-specific temporary file. The brief must be self-contained: the OpenCode session cannot see this conversation. When the `workflows` skill is installed, use the brief structure in its `references/agent-dispatch.md`.
 2. Check `command -v opencode`, `opencode run --help`, and `opencode models zai-coding-plan`. The wrapper defaults to `zai-coding-plan/glm-5.3`; preserve any explicit model/provider. If unavailable, report the mismatch rather than substituting a model.
 3. The wrapper is `scripts/glm.sh` under this skill's base directory (reported when the skill loads). Launch it with all output redirected into the task's temporary folder so the JSON event stream never enters your context:
 

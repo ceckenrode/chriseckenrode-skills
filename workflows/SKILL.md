@@ -1,17 +1,18 @@
 ---
-name: conductor
-description: Coordinate selected models across planning, implementation, and optional review workflows.
+name: workflows
+description: Explicitly invoke to describe a workflow; the main agent orchestrates and supervises planning, implementation, and optional review across selected models.
 disable-model-invocation: true
 ---
 
-# Conductor
+# Workflows
 
 Activate only on an explicit user request. For help or a bare invocation, read
 [usage help](references/help.md) and stop without dispatching or writing artifacts.
 
-The lead owns scope, steering, integration, and acceptance. Planning defaults to
-the lead; an explicitly selected planner owns architecture and plan synthesis
-within that scope. Implementers follow the settled design.
+The user describes the workflow; you, the main agent loading this skill,
+orchestrate and supervise it. You own scope, steering, integration, and acceptance.
+Planning defaults to you; an explicitly selected planner owns architecture and
+plan synthesis within that scope. Implementers follow the settled design.
 
 ## Route by intent
 

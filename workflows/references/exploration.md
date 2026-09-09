@@ -1,13 +1,13 @@
 # Internal exploration
 
 Use small workers to absorb context-heavy navigation and return anchored evidence,
-preserving the lead's context for steering and acceptance. Read a tiny known
+preserving the main agent's context for steering and acceptance. Read a tiny known
 excerpt directly when delegation would add overhead.
 
 ## Dispatch boundary
 
 During an explicitly authorized planning or exploration run, after workflow setup,
-the lead may select bounded read-only explorers without routine model questions.
+the main agent may select bounded read-only explorers without routine model questions.
 This allowance does not apply to help or bare invocation. Explorers gather evidence;
 the planning owner makes architectural decisions. Implementation, review, and
 fixing retain their separately configured roles.

@@ -9,10 +9,10 @@ artifacts.
 ## One stage
 
 ```text
-Use conductor with one Fable worker at high reasoning to fix this bug.
-Use conductor to write a lite plan for this task, then stop for my approval.
-Use conductor with one Astra planner at high reasoning to design this migration.
-Use conductor to fix these supplied review findings without another review.
+Use workflows with one Fable worker at high reasoning to fix this bug.
+Use workflows to write a lite plan for this task, then stop for my approval.
+Use workflows with one Astra planner at high reasoning to design this migration.
+Use workflows to fix these supplied review findings without another review.
 ```
 
 `Lite` and `detailed` select plan depth; otherwise choose from complexity and risk.
@@ -21,11 +21,11 @@ Model names are examples, subject to backend availability.
 ## Multiple stages
 
 ```text
-Use conductor to plan [task] with one Astra worker at high reasoning, implement
+Use workflows to plan [task] with one Astra worker at high reasoning, implement
 with two Luna workers at medium in independent tracer-bullet slices, then review
 once with one Fable worker at high. You own integration; stop with findings.
 
-Use conductor to execute [plan] with two Luna workers at medium reasoning.
+Use workflows to execute [plan] with two Luna workers at medium reasoning.
 Then run up to three review/fix rounds with one Fable reviewer at high and one
 Luna fixer at medium. You own integration; stop early when a round is clean.
 ```
@@ -38,7 +38,7 @@ CLI dispatch requires the selected companion skill from
 ## Reuse and recovery
 
 ```text
-Use conductor with the last accepted workflow settings from this conversation.
+Use workflows with the last accepted workflow settings from this conversation.
 For [new task], change only implementation to two Luna workers at medium reasoning.
 ```
 

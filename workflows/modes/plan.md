@@ -12,12 +12,12 @@ full dependency graph, exhaustive signatures, and tracer-bullet slices when thos
 would add no value for a small, low-risk task. A detailed plan keeps the rigor
 below where it helps implementation correctness.
 
-Plan for an implementer with less capability and context than the orchestrator. Make design decisions explicit enough that correct execution depends on following the plan, not reconstructing your reasoning. Use the user's format or project conventions; scale detail to uncertainty and risk rather than adding boilerplate.
+Plan for an implementer with less capability and context than the main agent. Make design decisions explicit enough that correct execution depends on following the plan, not reconstructing your reasoning. Use the user's format or project conventions; scale detail to uncertainty and risk rather than adding boilerplate.
 
 1. Identify intended behavior, constraints, existing decisions, and acceptance criteria.
 2. Gather evidence using [internal exploration](../references/exploration.md).
    Close unknowns that affect design before synthesizing the plan.
-3. Synthesize findings into a direction. The planning owner weighs proposed approaches, makes creative and architectural decisions, and distinguishes current behavior from intended behavior. The lead steers scope and accepts the result. Resolve contradictions through targeted worker questions or a user decision; record assumptions and rationale.
+3. Synthesize findings into a direction. The planning owner weighs proposed approaches, makes creative and architectural decisions, and distinguishes current behavior from intended behavior. The main agent steers scope and accepts the result. Resolve contradictions through targeted worker questions or a user decision; record assumptions and rationale.
 4. For detailed plans, decompose the work into a dependency graph and
    implementation-ready tasks using the contracts below. For lite plans, use an
    ordered actionable task sequence and record material dependencies. Resolve
@@ -87,7 +87,7 @@ For example, a boundary requirement should be as concrete as: "Add `parseCount(i
 
 When an uncertain API, interaction, or architecture choice could invalidate the plan, delegate a small prototype or experiment before finalizing that choice. Define the question and pass criterion, bound the experiment to scratch artifacts, and request results plus the artifact path. Distinguish tested prototype behavior from illustrative code; production implementation remains a separate authorized phase.
 
-A worker returning `NEEDS_DECISION` should supply the missing fact or choice and its consequences. Resolve it through targeted investigation or lead judgment; ask the user only when it changes their intended scope or requires their preference.
+A worker returning `NEEDS_DECISION` should supply the missing fact or choice and its consequences. Resolve it through targeted investigation or the main agent's judgment; ask the user only when it changes their intended scope or requires their preference.
 
 Save the plan using the location precedence in the bundled context reference: explicit path, the user's established plan location, then the run's temporary folder. A small plan can remain short, but it still records ordering, gates, and the tasks that can run together.
 

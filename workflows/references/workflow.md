@@ -9,10 +9,10 @@ Reuse the last accepted configuration available in the conversation or supplied
 handoff, then merge explicit overrides. Propose genuinely missing role settings
 for acceptance; already settled values need no approval again.
 
-Planning uses the current lead and effort unless an explicit or inherited
+Planning uses the current main agent and effort unless an explicit or inherited
 configuration selects a planning worker/model. An explicitly named planning model
-requires a worker even when it matches the lead. That planner owns architecture
-and plan synthesis; the lead steers scope and accepts the result. Record runtime
+requires a worker even when it matches the main agent. That planner owns architecture
+and plan synthesis; the main agent steers scope and accepts the result. Record runtime
 model/effort values only when exposed; otherwise label them current or inherited.
 
 Select only requested stages, for example:
@@ -49,7 +49,7 @@ source navigation. It does not defer downstream workflow settings.
 
 ## Verification
 
-The implementer and lead assess evidence against the selected branch's gates.
+The implementer and main agent assess evidence against the selected branch's gates.
 This built-in verification adds neither a reviewer nor an independent verifier.
 Keep read-only branches' checks read-only. The integration owner verifies the
 combined state; individual worker passes cannot establish that result.

@@ -43,7 +43,7 @@ If a prerequisite fails or changes its contract, block its affected dependents, 
 
 ## Verification gates
 
-- **Task gate:** require the worker's changed paths, acceptance-criteria results, exact commands and exit/results, and concise supporting evidence. The orchestrator accepts the implementation against the binding design and quality bar as well as test results. A `DONE` label alone does not release dependent work.
+- **Task gate:** require the worker's changed paths, acceptance-criteria results, exact commands and exit/results, and concise supporting evidence. The main agent accepts the implementation against the binding design and quality bar as well as test results. A `DONE` label alone does not release dependent work.
 - **Integration gate:** the explicit integration owner runs the accepted brief or plan's project checks and checks for cross-task behavior against the combined state. Individual task passes do not establish integration success.
 - **Acceptance gate:** verify the requested observable outcome. Where applicable, distinguish mocked tests from a real browser, application, provider, or deployment check; use the evidence the accepted brief or plan requires.
 
