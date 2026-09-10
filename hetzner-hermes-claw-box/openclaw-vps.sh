@@ -1764,6 +1764,72 @@ install_openclaw_and_opencode() {
   run_as_app_user "opencode --version || true"
 }
 
+# The gateway's secret egress proxy (openclaw.json secrets.egressProxy) injects
+# HTTP(S)_PROXY and MITM CA variables into every gateway-host exec. Codex,
+# Claude Code, and OpenCode call their own APIs directly and fail through that
+# proxy (407s, dropped long streams). Wrap whichever of them is installed in a
+# USER_BIN_DIR shim that strips the egress variables before exec'ing the real
+# binary; USER_BIN_DIR is first on PATH, so agents transparently get the safe
+# path while other tools keep the proxy environment. npm reinstalls restore
+# plain symlinks, so refresh-config re-runs this.
+install_proxy_safe_cli_wrappers() {
+  local cli candidate real existing tmp prefix
+  local -a rels prefixes=("$APP_HOME/.local" /usr/local /usr)
+  local strips='-u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy'
+  strips+=' -u ALL_PROXY -u all_proxy -u SSL_CERT_FILE -u SSL_CERT_DIR'
+  strips+=' -u CURL_CA_BUNDLE -u REQUESTS_CA_BUNDLE'
+  for cli in codex claude opencode; do
+    case "$cli" in
+      codex)    rels=('@openai/codex/bin/codex.js') ;;
+      claude)   rels=('@anthropic-ai/claude-code/bin/claude.exe') ;;
+      opencode) rels=('opencode-ai/bin/opencode.exe') ;;
+    esac
+    real=''
+    for prefix in "${prefixes[@]}"; do
+      for candidate in "${rels[@]}"; do
+        [[ -f "$prefix/lib/node_modules/$candidate" ]] || continue
+        real="$prefix/lib/node_modules/$candidate"
+        break 2
+      done
+    done
+    if [[ -z "$real" ]]; then
+      # Unknown install layout: resolve through PATH, but never wrap anything
+      # that already lives in USER_BIN_DIR (that is an operator-managed shim).
+      candidate="$(run_as_app_user "command -v $(shell_quote "$cli")")" || candidate=''
+      if [[ -z "$candidate" ]]; then
+        log "proxy-safe wrapper skipped: $cli is not installed"
+        continue
+      fi
+      real="$(run_as_app_user "readlink -f $(shell_quote "$candidate")")"
+      case "$real" in
+        "$USER_BIN_DIR"/*)
+          warn "proxy-safe wrapper skipped: $cli already has $real in ${USER_BIN_DIR}"
+          continue
+          ;;
+      esac
+    fi
+    existing="$USER_BIN_DIR/$cli"
+    if [[ -e "$existing" && ! -L "$existing" ]] \
+       && ! grep -q 'openclaw-vps managed proxy-safe wrapper' "$existing" 2>/dev/null; then
+      warn "proxy-safe wrapper skipped: $existing is operator-owned"
+      continue
+    fi
+    tmp="$(mktemp "$USER_BIN_DIR/.proxy-safe-$cli.XXXXXX")" || return 1
+    {
+      printf '#!/usr/bin/env bash\n'
+      printf '# %s - openclaw-vps managed proxy-safe wrapper\n' "$cli"
+      printf "# Strips gateway secret-egress proxy/CA variables that break this CLI's\n"
+      printf '# direct API calls (407s, dropped streams). Real binary: %s\n' "$real"
+      printf '# Re-wrap after CLI updates: /root/openclaw-vps.sh refresh-config\n'
+      printf 'exec env %s \\\n  %s "$@"\n' "$strips" "$real"
+    } >"$tmp"
+    chmod 0755 "$tmp"
+    chown "$APP_USER:$APP_USER" "$tmp"
+    mv -f "$tmp" "$existing"
+    log "proxy-safe wrapper installed: $existing -> $real"
+  done
+}
+
 write_user_env() {
   resolve_openclaw_timezone
   local model_provider="$1" model_base_url="$2" model_api_key="$3" model_id="$4" model_catalog="$5"
@@ -2499,7 +2565,7 @@ ensure_workspace_host_action_notes() {
       local tmp_tools
       tmp_tools="$(mktemp)"
       awk '
-        /^## VPS Host Actions$/ { skip = 1; next }
+        /^## (VPS Host Actions|Proxy-Safe CLI Wrappers)$/ { skip = 1; next }
         skip && /^## / { skip = 0 }
         !skip { print }
       ' "$tools_file" >"$tmp_tools"
@@ -2545,6 +2611,17 @@ Important rules:
 - Use \`${HOST_ACTION_SCRIPT} restart-vps\` when the user explicitly asks you to restart the VPS. Warn that the chat may go offline briefly, then run only that command.
 - Use ClawHub skill slugs, for example \`gog\`, not GitHub-style \`steipete/gog\` unless the user explicitly gives a ClawHub slug containing \`/\`.
 - If the wrapper reports that a skill already exists, treat the host skill installation as complete and run \`refresh-config\` or \`sandbox-audit\` as needed.
+EOF
+    cat >>"$tools_file" <<EOF
+
+## Proxy-Safe CLI Wrappers
+
+Installed coding CLIs (\`codex\`, \`claude\`, \`opencode\`) are wrapped in
+${USER_BIN_DIR}: each wrapper strips the gateway secret-egress proxy and CA
+variables before exec'ing the real binary, because direct API calls from these
+CLIs fail through that proxy (407s, dropped streams). Call the CLIs by name as
+usual. Do not bypass, edit, or shadow these wrappers, and do not set proxy
+variables when calling them; report problems to the operator instead.
 EOF
     chown "$APP_USER:$APP_USER" "$tools_file"
     chmod 0644 "$tools_file"
@@ -2917,6 +2994,7 @@ install_all() {
   install_node
   install_incus
   install_openclaw_and_opencode
+  install_proxy_safe_cli_wrappers
   ensure_git_gh_installed || return 1
   write_user_env "$MODEL_PROVIDER" "$MODEL_BASE_URL" "$model_api_key" "$MODEL_ID" "$MODEL_CATALOG" "$telegram_bot_token"
   ensure_user_shell_sources_env
@@ -3072,6 +3150,7 @@ cmd_refresh_config() {
   seed_provider_auth
   write_opencode_config
   write_helper_scripts
+  install_proxy_safe_cli_wrappers
   restart_openclaw_gateway
   log "OpenClaw and OpenCode config refreshed"
 }

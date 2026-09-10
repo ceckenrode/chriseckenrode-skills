@@ -2133,6 +2133,90 @@ prepare_github_ssh
         self.assertEqual(config['agents']['list'][0]['workspace'], str(workspace))
         self.assertFalse((state / 'home/workspace-dorian').exists())
 
+    def test_envfix_proxy_safe_cli_wrappers_install_and_refresh(self):
+        state = self.envfix_fixture()
+        body = r'''
+mkdir -p "$USER_BIN_DIR" \
+  "$APP_HOME/.local/lib/node_modules/@openai/codex/bin" \
+  "$APP_HOME/.local/lib/node_modules/@anthropic-ai/claude-code/bin" \
+  "$APP_HOME/.local/lib/node_modules/opencode-ai/bin"
+for real in "$APP_HOME/.local/lib/node_modules/@openai/codex/bin/codex.js" \
+  "$APP_HOME/.local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe" \
+  "$APP_HOME/.local/lib/node_modules/opencode-ai/bin/opencode.exe"; do
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$real"
+done
+install_proxy_safe_cli_wrappers
+install_proxy_safe_cli_wrappers
+'''
+        result = self.envfix_run(state, body)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name, relative in (
+                ('codex', '@openai/codex/bin/codex.js'),
+                ('claude', '@anthropic-ai/claude-code/bin/claude.exe'),
+                ('opencode', 'opencode-ai/bin/opencode.exe')):
+            wrapper = state / 'bin' / name
+            self.assertTrue(wrapper.is_file(), wrapper)
+            text = wrapper.read_text()
+            self.assertIn('openclaw-vps managed proxy-safe wrapper', text)
+            self.assertIn(str(state / 'home/.local/lib/node_modules' / relative), text)
+            self.assertIn('exec env -u HTTP_PROXY -u HTTPS_PROXY', text)
+            self.assertIn('-u SSL_CERT_FILE', text)
+            self.assertEqual(text.count('#!'), 1)
+        self.assertEqual(list((state / 'bin').glob('.proxy-safe-*')), [])
+        self.assertIn('proxy-safe wrapper installed', result.stdout)
+
+    def test_envfix_proxy_safe_cli_wrappers_respect_operator_shims(self):
+        state = self.envfix_fixture()
+        body = r'''
+mkdir -p "$USER_BIN_DIR"
+printf '#!/usr/bin/env sh\necho operator codex shim\n' > "$USER_BIN_DIR/codex"
+printf '#!/usr/bin/env bash\nexec env -u HTTPS_PROXY /bin/true "$@"\n' > "$USER_BIN_DIR/opencode-foreign"
+mkdir -p "$APP_HOME/.local/lib/node_modules/@openai/codex/bin"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$APP_HOME/.local/lib/node_modules/@openai/codex/bin/codex.js"
+run_as_app_user() {
+  case "$1" in
+    "command -v claude") return 1 ;;
+    "command -v opencode") printf '%s\n' "$USER_BIN_DIR/opencode-foreign" ;;
+    "readlink -f"*) printf '%s\n' "${1#readlink -f }" ;;
+    *) return 1 ;;
+  esac
+}
+install_proxy_safe_cli_wrappers
+'''
+        result = self.envfix_run(state, body)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        output = result.stdout + result.stderr
+        self.assertIn('codex is operator-owned', output)
+        self.assertIn('claude is not installed', output)
+        self.assertIn('already has', output)
+        self.assertEqual((state / 'bin' / 'codex').read_text(),
+                         '#!/usr/bin/env sh\necho operator codex shim\n')
+        self.assertFalse((state / 'bin' / 'claude').exists())
+        self.assertFalse((state / 'bin' / 'opencode').exists())
+
+    def test_envfix_tools_md_documents_proxy_safe_wrappers_once(self):
+        state = self.envfix_fixture()
+        result = self.envfix_run(state, 'regenerate_openclaw_config\n'
+                                      'ensure_workspace_host_action_notes\n'
+                                      'ensure_workspace_host_action_notes')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        notes = (state / 'home/workspace-dorian/TOOLS.md').read_text()
+        self.assertEqual(notes.count('## Proxy-Safe CLI Wrappers'), 1)
+        self.assertIn('gateway secret-egress proxy and CA', notes)
+        self.assertIn('Do not bypass, edit, or shadow these wrappers', notes)
+        self.assertIn('407s', notes)
+
+    def test_proxy_safe_cli_wrapper_wiring(self):
+        source = (SCRIPTS / 'openclaw-vps.sh').read_text()
+        self.assertEqual(source.count('install_proxy_safe_cli_wrappers() {'), 1)
+        self.assertIn('  install_openclaw_and_opencode\n'
+                      '  install_proxy_safe_cli_wrappers\n'
+                      '  ensure_git_gh_installed || return 1', source)
+        self.assertIn('  write_helper_scripts\n'
+                      '  install_proxy_safe_cli_wrappers\n'
+                      '  restart_openclaw_gateway', source)
+        self.assertIn('Proxy-Safe CLI Wrappers', source)
+
     def test_envfix_workspace_fresh_no_fallback_and_file_tool_configuration_contract(self):
         """Offline configuration contract, not a live OpenClaw file-tool test."""
         state = self.envfix_fixture(agents=[])
